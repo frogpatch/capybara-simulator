@@ -1,12 +1,47 @@
+# === DEPENDENCIES ===
 node_modules/
+
+# === SECRETS & CONFIG ===
 .env
-*.webm
-promo/
-capture.mjs
-screenshot.js
-.playwright-mcp/
+.env.*
+*.key
+*.pem
+*.secret
+credentials*
+config.local.*
+
+# === PLATFORM / TOOLING ===
+.DS_Store
+Thumbs.db
 .claude/
 .railway/
-.DS_Store
-models/*.zip
+.playwright-mcp/
+.vscode/
+.idea/
+
+# === DEV ARTIFACTS ===
+capture*.html
+capture*.mjs
+splat-test*.html
+splat/
+screenshot.js
+index_full*.html
+index_minimal.html
+diorama-capture*
+promo/
+docs/
+
+# === MEDIA / LARGE FILES ===
+*.webm
+*.mp4
 *.png
+*.zip
+*.tar.gz
+*.rar
+
+# === BUILD / TEMP ===
+dist/
+build/
+tmp/
+*.log
+*.tmp

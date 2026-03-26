@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta name="x-ogp-key" content="d3623dc6-3cfc-49fa-b771-3bbb8d52e4a1" id="ogp-key-meta" />
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Capybara Simulator</title>
@@ -74,7 +73,6 @@
         }
         #btn-rain.active { background: rgba(255,255,255,0.3); color: rgba(255,255,255,0.95); }
     </style>
-    <meta name="x-pf-key" content="9cr2tMejZArKSAw1JAvQMmQBRVKwNCvBbLPRNAzBgYZV" />
     <script src="https://sdk.play.fun/latest"></script>
     <script src="https://cdn.socket.io/4.8.0/socket.io.min.js"></script>
     <script type="importmap">
@@ -87,6 +85,7 @@
     </script>
 </head>
 <body>
+    <div id="zdbg" style="position:fixed;bottom:60px;left:10px;color:#0f0;font-family:monospace;font-size:14px;font-weight:bold;z-index:99;pointer-events:none;text-shadow:0 0 4px #000;white-space:pre;background:rgba(0,0,0,0.5);padding:6px 10px;border-radius:6px"></div>
     <div id="hud" style="display:none;">
         <div id="points"><span id="score">0</span> vibes</div>
         <div id="music-controls">
@@ -103,307 +102,305 @@
     <script type="module">
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { frameCorners } from 'three/addons/utils/CameraUtils.js';
+        import { ReactionSystem } from './js/reaction-system.js';
+        import { PropManager } from './js/prop-manager.js';
 
-        // Model actual sizes from inspection:
-        // palm-trees: 25.91x5.28x5.24 (cluster of palms, huge)
-        // tree1: 4.06x9.43x4.24 (single round tree)
-        // tree2: 3.83x9.44x3.76 (single round tree)
-        // trees: 24.93x6.87x3.00 (tree cluster, wide)
-        // grass-turf: 1.84x0.51x0.50 (tiny)
-        // flower: 0.91x2.07x0.88 (single flower ~2m tall at scale 1)
-        // rocks: 7.28x2.15x1.32 (rock cluster, wide and flat)
-        // rock2: 3.42x2.32x3.48 (single rock)
+        const _isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
+        const _reactionsEnabled = new URLSearchParams(window.location.search).get('reactions') !== 'off';
 
-        class CapybaraSimulator {
-            constructor() {
-                this._isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
-                this.renderer = new THREE.WebGLRenderer({
-                    antialias: !this._isMobile,
-                    powerPreference: 'high-performance',
-                });
-                this.renderer.setSize(window.innerWidth, window.innerHeight);
-                this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this._isMobile ? 1.5 : 2));
-                this.renderer.shadowMap.enabled = true;
-                this.renderer.shadowMap.type = THREE.PCFShadowMap;
-                this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-                this.renderer.toneMappingExposure = 1.2;
-                this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-                document.body.appendChild(this.renderer.domElement);
+        // === RENDERER ===
+        const renderer = new THREE.WebGLRenderer({ antialias: !_isMobile });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, _isMobile ? 1.5 : 2));
+        renderer.shadowMap.enabled = true;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.2;
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        document.body.appendChild(renderer.domElement);
 
-                this.scene = new THREE.Scene();
-                this.scene.background = new THREE.Color(0xc8dce8);
-                this.scene.fog = new THREE.FogExp2(0xc5d8c5, 0.014); // atmospheric but can see background
+        // === SCENE ===
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x9ac8e8);
+        scene.fog = new THREE.Fog(0x9ac8e8, 20, 70);
 
-                // Camera: low angle revolving around capybara (matching reference)
-                this.camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 500);
+        // === CAMERA ===
+        // Camera looks straight at the capybara from the front
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500);
 
-                // Orbit params: capybara is at origin, camera revolves around her
-                this.orbitRadius = 5;
-                this.orbitHeight = 1.3; // low angle like reference
-                this.orbitSpeed = 0.08; // slow, cinematic
-                this.orbitAngle = 0;
-                this.orbitTarget = new THREE.Vector3(0, 0.5, 0); // capybara center
+        // === LIGHTING ===
+        const hemiLight = new THREE.HemisphereLight(0xd4e8f0, 0x3a5f2a, 0.8);
+        scene.add(hemiLight);
+        const sun = new THREE.DirectionalLight(0xfff4d6, 1.2);
+        sun.position.set(2, 8, 10);
+        sun.castShadow = true;
+        sun.shadow.mapSize.width = 2048;
+        sun.shadow.mapSize.height = 2048;
+        sun.shadow.bias = -0.001;
+        sun.shadow.camera.near = 0.5;
+        sun.shadow.camera.far = 30;
+        sun.shadow.camera.left = -6;
+        sun.shadow.camera.right = 6;
+        sun.shadow.camera.top = 6;
+        sun.shadow.camera.bottom = -6;
+        scene.add(sun);
+        const ambientLight = new THREE.AmbientLight(0x607060, 0.4);
+        scene.add(ambientLight);
 
-                // 3/4 view from her right, slightly above
-                this.camera.position.set(3.5, 1.8, 4);
-                this.camera.lookAt(this.orbitTarget);
+        // === ROOM DIMENSIONS (used for off-axis projection screen rectangle) ===
+        // No box walls — open landscape. roomW/roomH define the screen opening.
+        // Room adapts to screen aspect ratio
+        // From the camera's FOV and distance, compute how big the room opening
+        // needs to be to fill the viewport, then size the room to match
+        const fovRad = camera.fov * Math.PI / 180;
+        const aspect = window.innerWidth / window.innerHeight;
+        const camDist = 6.5; // distance from camera to room opening
+        const roomH = 2 * camDist * Math.tan(fovRad / 2);
+        const roomW = roomH * aspect;
+        const roomD = 7;     // depth (front to back)
+        const roomZ = -2;    // back wall z position
 
-                this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-                this.controls.target.copy(this.orbitTarget);
-                this.controls.maxPolarAngle = Math.PI / 2.05;
-                this.controls.minPolarAngle = Math.PI / 4;
-                this.controls.minDistance = 3;
-                this.controls.maxDistance = 15;
-                this.controls.enableDamping = true;
-                this.controls.dampingFactor = 0.05;
-                this.controls.autoRotate = false;
+        // Camera at exact center of room opening
+        const camZ = roomZ + roomD + camDist;
+        const camY = roomH / 2;
+        camera.position.set(0, camY, camZ);
+        camera.lookAt(0, camY, roomZ); // look straight at back wall center
 
-                this.clock = new THREE.Clock();
-                this.models = {};
-                this.loadedCount = 0;
-                this.totalModels = 0; // set dynamically in loadModels()
-                this._flowerInstancedMeshes = [];
-                this.capybara = null;
-                this.mixer = null;
+        // === OPEN LANDSCAPE ===
 
-                // Hat system
-                this.hatModels = [];
-                this.currentHatIndex = -1; // -1 = no hat
-                this.currentHatMesh = null;
-                this._capyHeadBone = null;
-                this._currentHatCfg = null;
-                this._hatsEnabled = true;
-                this._hatFollowPos = new THREE.Vector3();
-                this._hatFollowQuat = new THREE.Quaternion();
-                this._hatOffset = new THREE.Vector3();
-                // Correction: bone local +Y = world +Z (forward), so rotate hat -90° around X
-                // to map hat's local +Y (up) onto bone's local -Z (which = world +Y)
-                this._hatCorrectionQuat = new THREE.Quaternion().setFromAxisAngle(
-                    new THREE.Vector3(1, 0, 0), -Math.PI / 2
-                );
+        // Huge ground plane with vertex color variation
+        const groundSize = 160;
+        const groundGeo = new THREE.PlaneGeometry(groundSize, groundSize, 64, 64);
+        const gColors = new Float32Array(groundGeo.attributes.position.count * 3);
+        const gBase = new THREE.Color(0x3a7a2a);
+        const gDark = new THREE.Color(0x2a5a1a);
+        const gLight = new THREE.Color(0x4a9a3a);
+        for (let i = 0; i < groundGeo.attributes.position.count; i++) {
+            const t = Math.random();
+            const c = t < 0.33 ? gBase : t < 0.66 ? gDark : gLight;
+            gColors[i*3] = c.r; gColors[i*3+1] = c.g; gColors[i*3+2] = c.b;
+        }
+        groundGeo.setAttribute('color', new THREE.BufferAttribute(gColors, 3));
+        const ground = new THREE.Mesh(groundGeo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.set(0, -0.02, roomZ + roomD / 2);
+        ground.receiveShadow = true;
+        scene.add(ground);
 
-                // Weather system
-                this._weather = 'sunny'; // 'sunny' | 'rain' | 'transitioning'
-                this._weatherT = 0; // 0 = sunny, 1 = rain (lerp factor)
-                this._weatherTarget = 0;
-                this._weatherSpeed = 0.3; // transition speed (units/sec)
-                this._rainParticles = null;
-                this._rainAudio = null;
+        // Capybara platform rectangle (the original floor, kept as parallax reference)
+        const floorMat = new THREE.MeshLambertMaterial({ color: 0x2d6b1e });
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(roomW, roomD), floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.set(0, 0, roomZ + roomD / 2);
+        floor.receiveShadow = true;
+        scene.add(floor);
 
-                // Market cap / standing system
-                this._marketCap = null;
-                this._capyStanding = false;
-                this._mcapBubble = null;
-                this._mcapBubbleMat = null;
-                this._mcapBubbleCanvas = null;
-                this._standingCapybara = null;
-                this._standingHeadBone = null;
-                this._standingHeadBaseRotY = 0;
-                this._standingHeadBaseRotZ = 0;
-                this._standingHeadBaseRotX = 0;
-                // Stand FX
-                this._standFXt = 0;
-                this._standFXTarget = 0;
-                this._standFXSpeed = 0.5;
-                this._standMixer = null;
-                this._standUpAction = null;
-                this._standIdleAction = null;
-                this._standHaloLight = null;
-                this._thunderAudio = null;
-                this._standRevealTimer = null;
-                this._lightningFlash = 0; // 0–1, decays per frame for sky flicker
-                // Reusable vecs for bubble positioning (avoid per-frame allocation)
-                this._bubbleCamRight = new THREE.Vector3();
-                this._bubbleCamFwd = new THREE.Vector3();
-                this._bubbleHeadPos = new THREE.Vector3();
+        // Rolling hills at different depths for parallax
+        function addHill(x, z, radius, height, color) {
+            const geo = new THREE.SphereGeometry(radius, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2);
+            const hill = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color }));
+            hill.position.set(x, -radius * 0.15, z);
+            hill.scale.y = height / radius;
+            scene.add(hill);
+        }
+        addHill(-6, roomZ - 3, 5, 1.8, 0x3a7a2a);
+        addHill(7, roomZ - 2, 4, 1.5, 0x358025);
+        addHill(-3, roomZ - 6, 6, 2.2, 0x2d6b1e);
+        addHill(0, roomZ - 18, 15, 4, 0x2a5a1a);
+        addHill(-14, roomZ - 15, 12, 3.5, 0x266318);
+        addHill(12, roomZ - 20, 14, 3, 0x2d6b1e);
+        addHill(-8, roomZ - 25, 18, 5, 0x224f15);
+        addHill(15, roomZ - 28, 16, 4.5, 0x1e4512);
 
-                this.setupLighting();
-                this.loadModels().then(() => this.buildScene());
-                this.animate();
+        // Pond
+        const pond = new THREE.Mesh(
+            new THREE.CircleGeometry(2.5, 32),
+            new THREE.MeshLambertMaterial({ color: 0x3a8abf, transparent: true, opacity: 0.7 })
+        );
+        pond.rotation.x = -Math.PI / 2;
+        pond.position.set(3, 0.01, roomZ - 2);
+        scene.add(pond);
 
-                window.addEventListener('resize', () => {
-                    this.camera.aspect = window.innerWidth / window.innerHeight;
-                    this.camera.updateProjectionMatrix();
-                    this.renderer.setSize(window.innerWidth, window.innerHeight);
-                });
-            }
+        // === LOADING SYSTEM ===
+        const loader = new GLTFLoader();
+        let capybara = null;
+        let mixer = null;
+        let animClips = [];
+        let _animActions = {};
+        let _capyHeadBone = null;
+        let _headBaseRotY = 0, _headBaseRotZ = 0, _headBaseRotX = 0;
+        let _boneMap = {};
+        const bar = document.getElementById('loadBar');
+        const loadText = document.getElementById('loadText');
 
-            setupLighting() {
-                this._hemi = new THREE.HemisphereLight(0xd4e8f0, 0x3a5f2a, 0.8);
-                this.scene.add(this._hemi);
+        // Total models: 1 capybara + 3 decoration + 6 hats + 8 props = 18
+        let loadedCount = 0;
+        let totalModels = 4; // capybara + 3 decoration (will increase when hats/props start)
 
-                this._sun = new THREE.DirectionalLight(0xfff4d6, 1.2);
-                this._sun.position.set(10, 20, 5);
-                this._sun.castShadow = true;
-                this._sun.shadow.mapSize.set(1024, 1024);
-                this._sun.shadow.camera.left = -20;
-                this._sun.shadow.camera.right = 20;
-                this._sun.shadow.camera.top = 20;
-                this._sun.shadow.camera.bottom = -20;
-                this._sun.shadow.camera.near = 0.5;
-                this._sun.shadow.camera.far = 60;
-                this._sun.shadow.bias = -0.003;
-                this.scene.add(this._sun);
+        function updateLoadBar() {
+            bar.style.width = Math.round((loadedCount / totalModels) * 100) + '%';
+        }
 
-                this._ambient = new THREE.AmbientLight(0x607060, 0.4);
-                this.scene.add(this._ambient);
-            }
+        // === LOAD CAPYBARA ===
+        loadText.textContent = 'loading capybara...';
+        const charGltf = await new Promise((resolve, reject) => {
+            loader.load('models/capybara-biped-animations.glb', resolve, (p) => {
+                if (p.total) bar.style.width = Math.round((p.loaded / p.total) * 50) + '%';
+            }, reject);
+        });
+        loadedCount++;
+        updateLoadBar();
 
-            async loadModels() {
-                const loader = new GLTFLoader();
-                const bar = document.getElementById('loadBar');
-                const text = document.getElementById('loadText');
+        const capy = charGltf.scene;
+        const box = new THREE.Box3().setFromObject(capy);
+        const size = box.getSize(new THREE.Vector3());
+        const scaleFactor = 1.0 / (size.y || 0.001);
 
-                const modelFiles = {
-                    'palm-trees': 'models/palm-trees.glb',
-                    'tree1': 'models/tree1.glb',
-                    'tree2': 'models/tree2.glb',
-                    'trees': 'models/trees.glb',
-                    'grass-turf': 'models/grass-turf.glb',
-                    'flower': 'models/flower.glb',
-                    'rocks': 'models/rocks.glb',
-                    'rock2': 'models/rock2.glb',
-                    'capybara': 'models/capybara-rigged.glb',
-                };
+        const capyGroup = new THREE.Group();
+        capyGroup.add(capy);
+        capy.scale.setScalar(scaleFactor);
+        // Position capybara at center of room, pushed back so fully visible
+        capyGroup.position.set(0, -0.05, roomZ + roomD * 0.55);
 
-                // ── ADD NEW HATS HERE ──────────────────────────────────────────
-                const hatFiles = [
-                    'models/hats/baseball.glb',
-                    'models/hats/graduation.glb',
-                    'models/hats/hardhat.glb',
-                    'models/hats/pirate.glb',
-                    'models/hats/tophat.glb',
-                    'models/hats/wizard.glb',
-                ];
-                // ──────────────────────────────────────────────────────────────
-
-                // Auto-compute total so loading bar stays accurate when hats are added
-                this.totalModels = Object.keys(modelFiles).length + hatFiles.length;
-
-                for (const [name, path] of Object.entries(modelFiles)) {
-                    try {
-                        text.textContent = `loading ${name}...`;
-                        const gltf = await new Promise((resolve, reject) => {
-                            loader.load(path, resolve, undefined, reject);
-                        });
-                        this.models[name] = gltf.scene;
-                        // Store animations for capybara
-                        if (name === 'capybara' && gltf.animations.length > 0) {
-                            this.capyAnimations = gltf.animations;
-                            console.log('Capybara animations:', gltf.animations.map(a => a.name));
-                        }
-                        this.loadedCount++;
-                        bar.style.width = (this.loadedCount / this.totalModels * 100) + '%';
-                    } catch (e) {
-                        console.warn(`Failed to load ${name}:`, e);
-                        this.loadedCount++;
-                        bar.style.width = (this.loadedCount / this.totalModels * 100) + '%';
+        capy.traverse(c => {
+            if (c.isMesh) {
+                c.castShadow = true;
+                c.receiveShadow = true;
+                if (c.material) {
+                    c.material = c.material.clone();
+                    if (c.material.emissiveMap && !c.material.map) {
+                        c.material.map = c.material.emissiveMap;
                     }
+                    c.material.emissive.set(0, 0, 0);
+                    c.material.emissiveIntensity = 0;
+                    c.material.emissiveMap = null;
+                    c.material.metalness = 0;
+                    c.material.roughness = 0.8;
+                    c.material.needsUpdate = true;
                 }
+            }
+        });
 
-                // Load hats
-                for (const hatPath of hatFiles) {
-                    try {
-                        const hatName = hatPath.split('/').pop().replace('.glb', '');
-                        text.textContent = `loading ${hatName}...`;
-                        const gltf = await new Promise((resolve, reject) => {
-                            loader.load(hatPath, resolve, undefined, reject);
-                        });
-                        const normalized = this.normalizeHatModel(gltf.scene);
-                        this.hatModels.push(normalized);
-                        this.loadedCount++;
-                        bar.style.width = (this.loadedCount / this.totalModels * 100) + '%';
-                    } catch (e) {
-                        console.warn(`Failed to load hat ${hatPath}:`, e);
-                        this.loadedCount++;
-                        bar.style.width = (this.loadedCount / this.totalModels * 100) + '%';
-                    }
+        scene.add(capyGroup);
+        capybara = capyGroup;
+
+        // Find head bone for hat attachment and head sway
+        capy.traverse(c => {
+            if (c.isBone) {
+                _boneMap[c.name] = c;
+                if (c.name.toLowerCase() === 'head') {
+                    _capyHeadBone = c;
+                    _headBaseRotY = c.rotation.y;
+                    _headBaseRotZ = c.rotation.z;
+                    _headBaseRotX = c.rotation.x;
                 }
-
-                // Load standing capybara (optional - dormant until model file is provided)
-                await this._loadStandingCapybara(loader);
             }
+        });
+        console.log('Bones found:', Object.keys(_boneMap));
 
-            placeModel(name, x, y, z, scale = 1, rotY = 0) {
-                const src = this.models[name];
-                if (!src) return null;
-                const clone = src.clone();
-                clone.position.set(x, y, z);
-                clone.scale.set(scale, scale, scale);
-                clone.rotation.y = rotY;
-                clone.traverse(c => {
-                    if (c.isMesh) {
-                        c.castShadow = true;
-                        c.receiveShadow = true;
-                    }
-                });
-                this.scene.add(clone);
-                return clone;
+        // Setup animation (clips are in the same GLB)
+        animClips = charGltf.animations;
+        if (animClips.length > 0) {
+            mixer = new THREE.AnimationMixer(capyGroup);
+            _animActions = {};
+            for (const clip of animClips) {
+                _animActions[clip.name] = mixer.clipAction(clip);
             }
+            const idleClip = animClips.find(a => a.name === 'Confused_Scratch');
+            if (idleClip) _animActions['Confused_Scratch'].play();
+            console.log('Animations:', animClips.map(a => a.name));
+        }
 
-            // Normalize a hat GLB to a consistent brim width and zero-based pivot.
-            // Scales the model so its widest horizontal dimension = targetWidth (world meters),
-            // centers it on XZ, and shifts it so its bottom sits at local y=0.
-            // Wraps in a Group so the attachment point is always hat-bottom-center.
-            // Drop any new hat GLB in models/hats/ and it will auto-fit.
-            normalizeHatModel(hatScene, targetWidth = 0.6) {
-                const box = new THREE.Box3().setFromObject(hatScene);
-                const size = box.getSize(new THREE.Vector3());
+        // === SCENE DECORATION ===
+        loadText.textContent = 'decorating...';
 
-                // Scale by max horizontal span (X or Z) — preserves hat proportions
-                const maxHoriz = Math.max(size.x, size.z);
-                if (maxHoriz > 0) hatScene.scale.setScalar(targetWidth / maxHoriz);
+        // Helper to load a GLB, fix materials, return scene
+        async function loadModel(path) {
+            const gltf = await new Promise((res, rej) => loader.load(path, res, undefined, rej));
+            gltf.scene.traverse(c => {
+                if (c.isMesh && c.material) {
+                    c.material = c.material.clone();
+                    if (c.material.emissiveMap && !c.material.map) c.material.map = c.material.emissiveMap;
+                    if (c.material.emissive) c.material.emissive.set(0, 0, 0);
+                    c.material.emissiveIntensity = 0;
+                    c.material.emissiveMap = null;
+                    c.material.needsUpdate = true;
+                    c.castShadow = true;
+                    c.receiveShadow = true;
+                }
+            });
+            return gltf.scene;
+        }
 
-                // Recompute after scale: center XZ, push bottom to y = 0
-                const box2 = new THREE.Box3().setFromObject(hatScene);
-                const center2 = box2.getCenter(new THREE.Vector3());
-                hatScene.position.x -= center2.x;
-                hatScene.position.z -= center2.z;
-                hatScene.position.y -= box2.min.y;
+        // Helper to place a clone
+        function placeClone(src, x, y, z, scale, rotY) {
+            const c = src.clone();
+            c.position.set(x, y, z);
+            c.scale.setScalar(scale);
+            if (rotY) c.rotation.y = rotY;
+            scene.add(c);
+            return c;
+        }
 
-                // Wrap so external position/rotation acts on bottom-center of hat
-                const wrapper = new THREE.Group();
-                wrapper.add(hatScene);
-                return wrapper;
-            }
+        // Instanced flowers with GPU wind (from capybara-simulator)
+        const _flowerInstancedMeshes = [];
+        try {
+            // Load decoration models
+            const [flowerModel, rockModel, grassModel] = await Promise.all([
+                loadModel('models/flower.glb'),
+                loadModel('models/rock2.glb'),
+                loadModel('models/grass-turf.glb'),
+            ]);
+            loadedCount += 3;
+            updateLoadBar();
 
-            // Instance ALL meshes from flower.glb (petals + stems), GPU wind in vertex shader
-            _buildFlowerInstances() {
-                // Collect all meshes from the flower model
-                const srcMeshes = [];
-                this.models['flower'].traverse(c => {
-                    if (c.isMesh && c.material) srcMeshes.push(c);
-                });
-                if (srcMeshes.length === 0) return;
+            const capyZ = roomZ + roomD * 0.55;
+            const hw = roomW / 2;
 
-                // Pre-compute placement positions (shared across all mesh parts)
-                const COUNT = 400;
+            // === INSTANCED FLOWERS — 400 with GPU wind sway ===
+            const FLOWER_COUNT = 400;
+            const srcMeshes = [];
+            flowerModel.traverse(c => { if (c.isMesh && c.material) srcMeshes.push(c); });
+
+            if (srcMeshes.length > 0) {
                 const dummy = new THREE.Object3D();
                 const matrices = [];
-                const windPhases    = new Float32Array(COUNT);
-                const windStrengths = new Float32Array(COUNT);
+                const windPhases = new Float32Array(FLOWER_COUNT);
+                const windStrengths = new Float32Array(FLOWER_COUNT);
                 let idx = 0;
-                const clusters = [[0,0],[-4,2],[5,-1],[-2,-3],[3,4],[-6,-2],[7,2],[-3,5],[1,-5],[6,-4]];
 
-                for (let attempt = 0; attempt < 1500 && idx < COUNT; attempt++) {
+                // Cluster centers spread across the landscape at different depths
+                const clusters = [
+                    // Near platform
+                    [0, roomZ+roomD*0.5], [-hw, roomZ+1], [hw, roomZ+1],
+                    // Mid field
+                    [-4, roomZ-1], [4, roomZ-2], [0, roomZ-3],
+                    [-6, roomZ+1], [6, roomZ],
+                    // Far field
+                    [-8, roomZ-8], [7, roomZ-7], [0, roomZ-12],
+                    [-5, roomZ-15], [5, roomZ-18], [-10, roomZ-10],
+                    [10, roomZ-12], [0, roomZ-20],
+                    // Very far
+                    [-12, roomZ-22], [12, roomZ-25], [0, roomZ-30],
+                ];
+
+                for (let attempt = 0; attempt < 2000 && idx < FLOWER_COUNT; attempt++) {
                     const c = clusters[Math.floor(Math.random() * clusters.length)];
-                    const x = c[0] + (Math.random() - 0.5) * 8;
-                    const z = c[1] + (Math.random() - 0.5) * 5;
-                    if (z < -7 || z > 8) continue;
-                    if (Math.sqrt(x * x + z * z) < 1.2) continue;
-                    const scale = 0.30 + Math.random() * 0.2;
+                    const x = c[0] + (Math.random() - 0.5) * 10;
+                    const z = c[1] + (Math.random() - 0.5) * 8;
+                    // Skip if too close to capybara
+                    if (Math.abs(x) < 0.8 && Math.abs(z - capyZ) < 1.0) continue;
+                    const scale = 0.25 + Math.random() * 0.25;
                     dummy.position.set(x, 0, z);
                     dummy.rotation.set(0, Math.random() * Math.PI * 2, 0);
                     dummy.scale.setScalar(scale);
                     dummy.updateMatrix();
                     matrices.push(dummy.matrix.clone());
-                    windPhases[idx]    = Math.random() * Math.PI * 2;
+                    windPhases[idx] = Math.random() * Math.PI * 2;
                     windStrengths[idx] = 0.06 + Math.random() * 0.05;
                     idx++;
                 }
 
-                this._flowerInstancedMeshes = [];
                 const wpSlice = windPhases.slice(0, idx);
                 const wsSlice = windStrengths.slice(0, idx);
 
@@ -413,11 +410,6 @@
                     geo.applyMatrix4(localMat);
 
                     const mat = srcMesh.material.clone();
-                    // Recolor petals to lavender
-                    if (mat.name === 'Flowers') {
-                        mat.map = null;
-                        mat.color.set(0xc4a0e0);
-                    }
                     mat.userData.uniforms = { windTime: { value: 0 } };
                     mat.onBeforeCompile = (shader) => {
                         shader.uniforms.windTime = mat.userData.uniforms.windTime;
@@ -439,732 +431,666 @@
                     mesh.castShadow = false;
                     mesh.receiveShadow = false;
                     mesh.frustumCulled = false;
-
-                    for (let i = 0; i < idx; i++) {
-                        mesh.setMatrixAt(i, matrices[i]);
-                    }
+                    for (let i = 0; i < idx; i++) mesh.setMatrixAt(i, matrices[i]);
                     mesh.instanceMatrix.needsUpdate = true;
-                    geo.setAttribute('aWindPhase',    new THREE.InstancedBufferAttribute(wpSlice.slice(), 1));
+                    geo.setAttribute('aWindPhase', new THREE.InstancedBufferAttribute(wpSlice.slice(), 1));
                     geo.setAttribute('aWindStrength', new THREE.InstancedBufferAttribute(wsSlice.slice(), 1));
-                    this.scene.add(mesh);
-                    this._flowerInstancedMeshes.push(mesh);
+                    scene.add(mesh);
+                    _flowerInstancedMeshes.push(mesh);
                 }
+                console.log(`Instanced ${idx} flowers across ${srcMeshes.length} mesh parts`);
             }
 
-            // Terrain: foreground SAME LEVEL as pond, small bump behind
-            getTerrainY(x, z) {
-                if (z > -10) return 0; // flat foreground + pond area at same level
-                if (z > -16) return 0; // pond zone, flat
-                // Behind pond: gentle bump/hill, NOT a mountain
-                if (z > -30) {
-                    const t = (z + 16) / (-14);
-                    return t * t * 3.0; // small rise, max ~3m
-                }
-                return 3.0;
+            // === ROCKS (clones — fewer, different sizes at depth layers) ===
+            // Corner rocks on the floor rectangle (parallax reference)
+            placeClone(rockModel, -hw+0.2, 0, roomZ+0.2, 0.18, Math.random()*Math.PI);       // back-left
+            placeClone(rockModel, hw-0.2, 0, roomZ+0.2, 0.25, Math.random()*Math.PI);         // back-right
+            placeClone(rockModel, -hw+0.2, 0, roomZ+roomD-0.2, 0.3, Math.random()*Math.PI);   // front-left
+            placeClone(rockModel, hw-0.2, 0, roomZ+roomD-0.2, 0.22, Math.random()*Math.PI);   // front-right
+            // Near
+            placeClone(rockModel, -hw-0.5, 0, capyZ-1, 0.25, Math.random()*Math.PI);
+            placeClone(rockModel, hw+0.5, 0, capyZ+0.5, 0.2, Math.random()*Math.PI);
+            // Mid
+            for (const [x,z,s] of [
+                [-5,roomZ-2,0.4],[4.5,roomZ-3,0.35],[-2,roomZ-5,0.5],
+                [6,roomZ-4.5,0.3],[0,roomZ-1.5,0.2],[4.5,roomZ-1.5,0.15],[1.5,roomZ-2.5,0.18],
+            ]) placeClone(rockModel, x, 0, z, s, Math.random()*Math.PI);
+            // Far
+            for (const [x,z,s] of [
+                [-7,roomZ-10,0.8],[8,roomZ-8,0.7],[-3,roomZ-15,1.0],
+                [5,roomZ-20,0.9],[-10,roomZ-25,1.2],
+            ]) placeClone(rockModel, x, 0, z, s, Math.random()*Math.PI);
+
+            // === GRASS (clones — scattered) ===
+            for (const [x,z] of [
+                [-hw-0.3,roomZ+1],[hw+0.3,roomZ+3],[-1,roomZ+roomD+0.3],[1,roomZ+roomD+0.3],
+                [-4,roomZ-1],[5,roomZ-2],[-3,roomZ-4],[3,roomZ-5],[-6,roomZ+2],[6,roomZ+1],[0,roomZ-3],
+            ]) placeClone(grassModel, x, 0.02, z, 0.3+Math.random()*0.2, Math.random()*Math.PI*2);
+            for (let i = 0; i < 12; i++) {
+                const x = (Math.random()-0.5)*25, z = roomZ - 3 - Math.random()*20;
+                placeClone(grassModel, x, 0.02, z, 0.3+Math.random()*0.3, Math.random()*Math.PI*2);
             }
 
-            buildScene() {
-                // === TERRAIN ===
-                const groundGeo = new THREE.PlaneGeometry(140, 120, 50, 40);
-                groundGeo.rotateX(-Math.PI / 2);
-                const pos = groundGeo.attributes.position;
-                for (let i = 0; i < pos.count; i++) {
-                    const x = pos.getX(i);
-                    const z = pos.getZ(i);
-                    let y = this.getTerrainY(x, z);
-                    const edgeDist = Math.abs(x) - 25;
-                    if (edgeDist > 0) y += edgeDist * 0.2;
-                    pos.setY(i, y);
-                }
-                groundGeo.computeVertexNormals();
+            console.log('Open landscape decorated');
+        } catch (e) {
+            console.warn('Decoration failed (non-critical):', e);
+        }
 
-                const colors = new Float32Array(pos.count * 3);
-                for (let i = 0; i < pos.count; i++) {
-                    const x = pos.getX(i);
-                    const z = pos.getZ(i);
-                    const distToPond = Math.sqrt(x * x + (z + 13) * (z + 13));
-                    let r, g, b;
-                    if (distToPond < 7) {
-                        const t = Math.max(0, 1 - distToPond / 7);
-                        r = 0.22 + t * 0.55;
-                        g = 0.42 + t * 0.12;
-                        b = 0.16 + t * 0.20;
-                    } else {
-                        r = 0.20 + Math.random() * 0.02;
-                        g = 0.42 + Math.random() * 0.03;
-                        b = 0.15;
-                    }
-                    colors[i * 3] = r;
-                    colors[i * 3 + 1] = g;
-                    colors[i * 3 + 2] = b;
-                }
-                groundGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-                const ground = new THREE.Mesh(groundGeo, new THREE.MeshLambertMaterial({ vertexColors: true }));
-                ground.receiveShadow = true;
-                this.scene.add(ground);
+        // Trees loaded separately so a failure doesn't kill decorations
+        try {
+            const [tree1Model, tree2Model] = await Promise.all([
+                loadModel('models/tree1.glb'),
+                loadModel('models/tree2.glb'),
+            ]);
+            for (const [x,z,s] of [
+                [-8,roomZ-8,1.2],[-4,roomZ-12,1.5],[7,roomZ-9,1.0],
+                [3,roomZ-14,1.8],[-10,roomZ-15,1.6],[10,roomZ-12,1.3],
+                [-6,roomZ-20,2.0],[8,roomZ-18,1.7],[0,roomZ-22,2.2],
+                [-12,roomZ-10,1.1],[12,roomZ-16,1.4],
+                [-15,roomZ-30,1.5],[14,roomZ-28,1.3],[0,roomZ-35,2.0],
+                [-8,roomZ-32,1.6],[10,roomZ-34,1.8],
+            ]) {
+                const model = Math.random() > 0.5 ? tree1Model : tree2Model;
+                placeClone(model, x, 0, z, s, Math.random()*Math.PI*2);
+            }
+            console.log('Trees placed');
+        } catch (e) {
+            console.warn('Trees failed (non-critical):', e);
+        }
 
-                // === SKY DOME ===
-                const skyGeo = new THREE.SphereGeometry(200, 32, 16);
-                const skyMat = new THREE.ShaderMaterial({
-                    side: THREE.BackSide,
-                    uniforms: {
-                        topColor: { value: new THREE.Color(0x87CEEB) },
-                        bottomColor: { value: new THREE.Color(0xd0ddd0) },
-                        offset: { value: 10 },
-                        exponent: { value: 0.4 },
-                    },
-                    vertexShader: `
-                        varying vec3 vWorldPos;
-                        void main() {
-                            vec4 wp = modelMatrix * vec4(position, 1.0);
-                            vWorldPos = wp.xyz;
-                            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                        }
-                    `,
-                    fragmentShader: `
-                        uniform vec3 topColor;
-                        uniform vec3 bottomColor;
-                        uniform float offset;
-                        uniform float exponent;
-                        varying vec3 vWorldPos;
-                        void main() {
-                            float h = normalize(vWorldPos + offset).y;
-                            gl_FragColor = vec4(mix(bottomColor, topColor, max(pow(max(h, 0.0), exponent), 0.0)), 1.0);
-                        }
-                    `,
+        // ============================================================
+        // HAT SYSTEM
+        // ============================================================
+        const hatModels = [];
+        let currentHatIndex = -1; // -1 = no hat
+        let currentHatMesh = null;
+        let _currentHatCfg = null;
+        let _hatsEnabled = true;
+        const _hatFollowPos = new THREE.Vector3();
+        const _hatFollowQuat = new THREE.Quaternion();
+        const _hatOffset = new THREE.Vector3();
+        const _hatCorrectionQuat = new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(1, 0, 0), -Math.PI / 2
+        );
+
+        function normalizeHatModel(hatScene, targetWidth = 0.6) {
+            const box = new THREE.Box3().setFromObject(hatScene);
+            const size = box.getSize(new THREE.Vector3());
+            const maxHoriz = Math.max(size.x, size.z);
+            if (maxHoriz > 0) hatScene.scale.setScalar(targetWidth / maxHoriz);
+            const box2 = new THREE.Box3().setFromObject(hatScene);
+            const center2 = box2.getCenter(new THREE.Vector3());
+            hatScene.position.x -= center2.x;
+            hatScene.position.z -= center2.z;
+            hatScene.position.y -= box2.min.y;
+            const wrapper = new THREE.Group();
+            wrapper.add(hatScene);
+            return wrapper;
+        }
+
+        // Load hats
+        const hatFiles = [
+            'models/hats/baseball.glb',
+            'models/hats/graduation.glb',
+            'models/hats/hardhat.glb',
+            'models/hats/pirate.glb',
+            'models/hats/tophat.glb',
+            'models/hats/wizard.glb',
+        ];
+        totalModels += hatFiles.length;
+        updateLoadBar();
+
+        for (const hatPath of hatFiles) {
+            try {
+                const hatName = hatPath.split('/').pop().replace('.glb', '');
+                loadText.textContent = `loading ${hatName}...`;
+                const gltf = await new Promise((resolve, reject) => {
+                    loader.load(hatPath, resolve, undefined, reject);
                 });
-                this._skyMat = skyMat;
-                this.scene.add(new THREE.Mesh(skyGeo, skyMat));
+                hatModels.push(normalizeHatModel(gltf.scene));
+                loadedCount++;
+                updateLoadBar();
+            } catch (e) {
+                console.warn(`Failed to load hat ${hatPath}:`, e);
+                loadedCount++;
+                updateLoadBar();
+            }
+        }
 
-                // === POND ===
-                const waterGeo = new THREE.CircleGeometry(8, 32);
-                waterGeo.rotateX(-Math.PI / 2);
-                const water = new THREE.Mesh(waterGeo, new THREE.MeshLambertMaterial({
-                    color: 0x6aaebb, transparent: true, opacity: 0.6,
-                }));
-                // Sandy bank around pond
-                const sandGeo = new THREE.CircleGeometry(10, 32);
-                sandGeo.rotateX(-Math.PI / 2);
-                const sand = new THREE.Mesh(sandGeo, new THREE.MeshLambertMaterial({ color: 0xc4a86a }));
-                sand.position.set(0, 0.005, -13);
-                sand.receiveShadow = true;
-                this.scene.add(sand);
+        // Per-hat placement offsets (world units)
+        const hatConfigs = [
+            { up: 0.50, fwd: 0.0 },   // baseball
+            { up: 0.32, fwd: -0.06 },  // graduation
+            { up: 0.57, fwd: 0.0 },    // hardhat
+            { up: 0.28, fwd: 0.06 },   // pirate
+            { up: 0.54, fwd: -0.08 },  // tophat
+            { up: 0.58, fwd: -0.04 },  // wizard
+        ];
 
-                // Water
-                water.position.set(0, 0.01, -13);
-                this.scene.add(water);
+        function cycleHat() {
+            currentHatIndex++;
+            if (currentHatIndex >= hatModels.length) currentHatIndex = -1;
 
-                // === FLOWERS (flower.glb, instanced lavender, GPU wind) ===
-                if (this.models['flower']) {
-                    this._buildFlowerInstances();
-                }
+            // Remove current hat
+            if (currentHatMesh && currentHatMesh.parent) {
+                currentHatMesh.parent.remove(currentHatMesh);
+                currentHatMesh = null;
+                _currentHatCfg = null;
+            }
 
-                // === GRASS TUFTS - sparse ===
-                if (this.models['grass-turf']) {
-                    const spots = [
-                        [-4, 2], [6, 0], [-8, -3], [10, 4], [-2, -6],
-                        [5, -5], [-7, 6], [3, -8], [12, -2], [-11, 0],
-                    ];
-                    for (const [x, z] of spots) {
-                        this.placeModel('grass-turf', x, 0.05, z, 0.5 + Math.random() * 0.3, Math.random() * Math.PI * 2);
-                    }
-                }
+            // Add new hat
+            if (currentHatIndex >= 0 && _capyHeadBone) {
+                const hat = hatModels[currentHatIndex].clone();
 
-                // === PALM TREES ===
-                // palm-trees.glb is 25x5x5 (a cluster). Scale ~0.4 = ~10m wide cluster, ~2m tall
-                // Need them visible. Place in mid-ground around pond, scale so they're prominent
-                // Extract individual palm trees from the cluster model
-                // The GLB has PalmTree_1 through PalmTree_5 as groups
-                if (this.models['palm-trees']) {
-                    const palmGroups = [];
-                    this.models['palm-trees'].traverse(c => {
-                        if (c.name && c.name.match(/^PalmTree_\d$/) && c.type === 'Group') {
-                            palmGroups.push(c);
+                // Fix Poly Pizza materials
+                hat.traverse(c => {
+                    if (c.isMesh && c.material) {
+                        if (c.material.emissiveMap && !c.material.map) {
+                            c.material.map = c.material.emissiveMap;
+                            c.material.emissive.setScalar(0);
+                            c.material.emissiveMap = null;
+                            c.material.needsUpdate = true;
                         }
-                    });
-
-                    const palmPositions = [
-                        // Sides of pond
-                        { x: -9, z: -10 }, { x: 9, z: -9 },
-                        { x: -6, z: -16 }, { x: 7, z: -16 },
-                        { x: -13, z: -12 }, { x: 13, z: -11 },
-                        // On the bump behind pond
-                        { x: -14, z: -22 }, { x: 12, z: -20 }, { x: -2, z: -24 },
-                        { x: 6, z: -26 }, { x: -8, z: -26 },
-                        { x: 14, z: -24 },
-                        // Far sides
-                        { x: -18, z: -10 }, { x: 20, z: -12 },
-                    ];
-
-                    for (const pos of palmPositions) {
-                        // Pick a random individual palm
-                        const srcPalm = palmGroups[Math.floor(Math.random() * palmGroups.length)];
-                        const clone = srcPalm.clone();
-                        // Reset position (palm is offset within cluster)
-                        // Get its world position within the cluster
-                        const palmBox = new THREE.Box3().setFromObject(clone);
-                        const center = palmBox.getCenter(new THREE.Vector3());
-                        // Offset to center the individual palm
-                        clone.position.sub(center);
-
-                        const wrapper = new THREE.Group();
-                        wrapper.add(clone);
-                        const y = this.getTerrainY(pos.x, pos.z);
-                        // Lift palm above ground (min.y of individual palms is negative)
-                        wrapper.position.set(pos.x, y + 0.5, pos.z);
-                        // Smaller than leafy trees (trees are scale 1.0-1.5)
-                        const s = 0.8 + Math.random() * 0.4;
-                        wrapper.scale.set(s, s, s);
-                        wrapper.rotation.y = Math.random() * Math.PI * 2;
-                        wrapper.traverse(c => { if(c.isMesh) { c.castShadow=true; c.receiveShadow=true; }});
-                        this.scene.add(wrapper);
                     }
-                }
+                });
 
-                // === ROUND LEAFY TREES - sides framing + background forest ===
-                // tree1/tree2 are ~4x9x4. At scale 1 they're 9m tall. Good size.
-                const leafy = [
-                    // LEFT FRAME - big tree partially cropped at edge like reference
-                    { n: 'tree1', x: -9, z: 3, s: 2.2 },
-                    { n: 'trees', x: -13, z: -3, s: 1.4 },
-                    { n: 'tree2', x: -15, z: -10, s: 1.5 },
-                    // RIGHT FRAME
-                    { n: 'tree1', x: 13, z: 2, s: 1.8 },
-                    { n: 'trees', x: 18, z: -8, s: 1.0 },
-                    // Mid-ground sides
-                    { n: 'trees', x: -18, z: -16, s: 1.2 },
-                    { n: 'tree2', x: 20, z: -14, s: 1.3 },
-                    // Background DENSE forest - lots of trees
-                    { n: 'trees', x: -12, z: -28, s: 1.2 },
-                    { n: 'tree1', x: -4, z: -30, s: 1.4 },
-                    { n: 'tree2', x: 4, z: -32, s: 1.3 },
-                    { n: 'trees', x: 12, z: -28, s: 1.2 },
-                    { n: 'tree1', x: -20, z: -26, s: 1.5 },
-                    { n: 'trees', x: 22, z: -26, s: 1.3 },
-                    { n: 'tree2', x: -8, z: -36, s: 1.2 },
-                    { n: 'tree1', x: 8, z: -36, s: 1.4 },
-                    { n: 'trees', x: 0, z: -38, s: 1.5 },
-                    { n: 'tree1', x: -16, z: -34, s: 1.3 },
-                    { n: 'tree2', x: 16, z: -34, s: 1.2 },
-                    { n: 'trees', x: -24, z: -30, s: 1.6 },
-                    { n: 'trees', x: 24, z: -30, s: 1.4 },
-                    // ON THE BUMP behind pond - trees on top of gentle rise
-                    { n: 'tree1', x: -6, z: -22, s: 1.3 },
-                    { n: 'tree2', x: 6, z: -22, s: 1.2 },
-                    { n: 'tree1', x: -12, z: -24, s: 1.4 },
-                    { n: 'tree2', x: 12, z: -24, s: 1.3 },
-                    { n: 'tree1', x: -16, z: -26, s: 1.2 },
-                    { n: 'tree2', x: 16, z: -26, s: 1.1 },
-                    { n: 'trees', x: -10, z: -28, s: 1.0 },
-                    { n: 'trees', x: 10, z: -28, s: 1.0 },
-                    { n: 'tree1', x: 0, z: -28, s: 1.3 },
-                ];
-                for (const t of leafy) {
-                    const y = this.getTerrainY(t.x, t.z);
-                    this.placeModel(t.n, t.x, y, t.z, t.s, Math.random() * Math.PI * 2);
-                }
+                const cfg = hatConfigs[currentHatIndex] || { up: 0.50, fwd: 0.14 };
+                hat.scale.set(1, 1, 1);
 
-                // === ROCKS - around pond banks and slopes ===
-                // rocks: 7.28x2.15x1.32 at scale 1. Scale ~1.5 for big boulders
-                // rock2: 3.42x2.32x3.48 at scale 1.
-                const rockPlacements = [
-                    // Foreground left
-                    { n: 'rock2', x: -9, z: -2, s: 1.5 },
-                    // LEFT side of pond
-                    { n: 'rock2', x: -7, z: -11, s: 1.5 },
-                    { n: 'rocks', x: -5, z: -15, s: 1.2 },
-                    { n: 'rock2', x: -11, z: -13, s: 1.8 },
-                    // RIGHT side of pond
-                    { n: 'rock2', x: 8, z: -12, s: 1.4 },
-                    { n: 'rocks', x: 6, z: -16, s: 1.0 },
-                    { n: 'rock2', x: 12, z: -14, s: 1.6 },
-                    // Behind pond on bump
-                    { n: 'rock2', x: -14, z: -20, s: 1.2 },
-                    { n: 'rock2', x: 15, z: -22, s: 1.4 },
-                    { n: 'rocks', x: -17, z: -24, s: 1.5 },
-                    { n: 'rock2', x: 18, z: -24, s: 1.8 },
-                ];
-                for (const r of rockPlacements) {
-                    const y = this.getTerrainY(r.x, r.z);
-                    this.placeModel(r.n, r.x, y - 0.3, r.z, r.s, Math.random() * Math.PI * 2);
-                }
-
-                // === CAPYBARA (rigged with animations) ===
-                if (this.models['capybara']) {
-                    const capy = this.models['capybara'];
-                    const box = new THREE.Box3().setFromObject(capy);
-                    const size = box.getSize(new THREE.Vector3());
-                    const minY = box.min.y;
-                    console.log('Capybara size:', size.x, size.y, size.z, 'minY:', minY);
-                    // Rigged model is tiny (armature scale 0.01, 90deg X rotation)
-                    // Scale up so capybara is ~1m tall
-                    const targetHeight = 1.0;
-                    const currentHeight = size.y || 0.001;
-                    const scaleFactor = targetHeight / currentHeight;
-                    
-                    // Wrap in a group so we can rotate cleanly
-                    const capyGroup = new THREE.Group();
-                    capyGroup.add(capy);
-                    capy.scale.set(scaleFactor, scaleFactor, scaleFactor);
-                    
-                    // Recalc after scale
-                    const box2 = new THREE.Box3().setFromObject(capyGroup);
-                    console.log('Capybara bbox min:', box2.min.x.toFixed(2), box2.min.y.toFixed(2), box2.min.z.toFixed(2),
-                                'max:', box2.max.x.toFixed(2), box2.max.y.toFixed(2), box2.max.z.toFixed(2));
-                    
-                    capyGroup.position.y = -0.05;
-                    // Face toward camera (camera is at +z)
-                    // The model faces +z in its local space after armature rotation
-                    // so rotate 180 to face -z... test different values
-                    capyGroup.rotation.y = 0;
-                    
-                    capy.traverse(c => {
+                // Per-hat tweaks
+                if (currentHatIndex === 0) { // baseball cap -> blue
+                    hat.traverse(c => {
                         if (c.isMesh) {
-                            c.castShadow = true;
-                            c.receiveShadow = true;
-                            if (c.material) {
-                                c.material = c.material.clone();
-                                if (c.material.emissiveMap && !c.material.map) {
-                                    c.material.map = c.material.emissiveMap;
-                                }
-                                c.material.emissive.set(0, 0, 0);
-                                c.material.emissiveIntensity = 0;
-                                c.material.emissiveMap = null;
-                                c.material.metalness = 0;
-                                c.material.roughness = 0.8;
-                                c.material.needsUpdate = true;
-                            }
+                            c.material = c.material.clone();
+                            c.material.color.setHex(0x1a3a8a);
+                            c.material.needsUpdate = true;
                         }
                     });
+                }
+                if (currentHatIndex === 1) { // graduation
+                    hat.children[0].rotation.y = Math.PI / 2;
+                    hat.children[0].rotation.z = -Math.PI / 12;
+                }
+                if (currentHatIndex === 2) { // hardhat
+                    hat.children[0].rotation.y = -Math.PI / 2;
+                    hat.children[0].position.x += 0.04;
+                }
+                if (currentHatIndex === 3) { // pirate -> 40% bigger
+                    hat.scale.set(1.40, 1.40, 1.40);
+                    hat.children[0].position.x += 0.04;
+                }
+                if (currentHatIndex === 4) { // tophat -> 25% bigger
+                    hat.scale.set(1.25, 1.25, 1.25);
+                    hat.children[0].rotation.x = -Math.PI / 18;
+                }
+                if (currentHatIndex === 5) { // wizard -> 25% bigger
+                    hat.scale.set(1.25, 1.25, 1.25);
+                    hat.children[0].rotation.x = -7 * Math.PI / 180;
+                }
 
-                    this.scene.add(capyGroup);
-                    this.capybara = capyGroup;
+                _currentHatCfg = cfg;
+                scene.add(hat);
+                currentHatMesh = hat;
+            }
+        }
 
-                    // Find head bone for manual sway (lofi vibes)
-                    this._capyHeadBone = null;
-                    capy.traverse(c => {
-                        if (c.name === 'head' && c.isBone) {
-                            this._capyHeadBone = c;
-                            this._headBaseRotY = c.rotation.y;
-                            this._headBaseRotZ = c.rotation.z;
-                            this._headBaseRotX = c.rotation.x;
+        // ============================================================
+        // PROPS (load after hats)
+        // ============================================================
+        const propManager = new PropManager({ scene, loader });
+        propManager.setMathUtils(THREE.Vector3, THREE.Quaternion, THREE.Box3);
+
+        if (_reactionsEnabled) {
+            totalModels += propManager.totalCount;
+            updateLoadBar();
+            loadText.textContent = 'loading props...';
+            await propManager.loadAll((name) => {
+                loadedCount++;
+                updateLoadBar();
+                loadText.textContent = 'loading ' + name + '...';
+            });
+            propManager.setBones(_boneMap);
+        }
+
+        // ============================================================
+        let _marketCap = null;
+
+        // ============================================================
+        // REACTION SYSTEM
+        // ============================================================
+        let reactionSystem = null;
+        // Face tracker proxy — updated every frame in animate() with real tracking data
+        const faceTrackerProxy = {
+            isActive: false,
+            isPresent: false,
+            timeSinceLeft: 0,
+            headPose: { x: 0, y: 0, z: 0, tiltX: 0, tiltY: 0 },
+        };
+        if (_reactionsEnabled && mixer && _animActions) {
+            reactionSystem = new ReactionSystem({
+                mixer,
+                animActions: _animActions,
+                faceTracker: faceTrackerProxy,
+                propManager,
+            });
+            reactionSystem.onFlowerShockwave = () => { _cameraZoomPulse = 0.3; };
+            reactionSystem.onVaporwaveFlash = () => { _vaporwaveFlash = 2.0; };
+            reactionSystem.onScreenShake = () => { _screenShake = 0.8; };
+            reactionSystem.onBoomboxWalk = () => { spawnBgCapybara(); };
+        }
+
+        // Background boombox capybara walk-through
+        let _bgCapybara = null, _bgCapyMixer = null, _bgCapyActive = false;
+        let _bgCapySpeed = 0, _bgCapyEndX = 0, _bgCapyGoRight = true;
+
+        window._triggerBoomboxWalk = () => spawnBgCapybara();
+        window._triggerAction = (name, dur) => reactionSystem?._triggerChaotic(name, dur || 5);
+        async function spawnBgCapybara() {
+            if (_bgCapyActive) return;
+
+            const group = new THREE.Group();
+            const goRight = false; // always right to left
+            const startX = roomW * 2;
+            const endX = -roomW * 2;
+
+            group.position.set(startX, -0.05, roomZ + roomD * 0.15);
+
+            // Load fresh GLB (SkinnedMesh.clone() loses bone bindings)
+            const bgGltf = await new Promise((res, rej) => loader.load('models/capybara-biped-animations.glb', res, undefined, rej));
+            const bgCapy = bgGltf.scene;
+            bgCapy.scale.setScalar(scaleFactor * 0.8);
+            bgCapy.rotation.y = goRight ? Math.PI / 2 : -Math.PI / 2;
+            bgCapy.traverse(c => {
+                if (c.isMesh && c.material) {
+                    c.material = c.material.clone();
+                    if (c.material.emissiveMap && !c.material.map) c.material.map = c.material.emissiveMap;
+                    if (c.material.emissive) c.material.emissive.set(0, 0, 0);
+                    c.material.emissiveIntensity = 0;
+                    c.material.emissiveMap = null;
+                    c.material.metalness = 0;
+                    c.material.roughness = 0.8;
+                    c.material.needsUpdate = true;
+                }
+            });
+            group.add(bgCapy);
+
+            // Load fresh boombox and attach to RightShoulder bone
+            let bgShoulder = null;
+            bgCapy.traverse(c => { if (c.isBone && c.name === 'RightShoulder') bgShoulder = c; });
+            if (bgShoulder) {
+                try {
+                    const bmGltf = await new Promise((res, rej) => loader.load('models/props/boombox.glb', res, undefined, rej));
+                    const bmModel = bmGltf.scene;
+                    // Bone is in original model space (huge), counter-scale:
+                    // bgCapy scaled by scaleFactor*0.8, so bone space is 1/(scaleFactor*0.8) bigger than world
+                    bmModel.scale.setScalar(350);
+                    bmModel.position.set(0, 30, -80);
+                    bmModel.rotation.set(Math.PI / 2, -Math.PI, Math.PI);
+                    bmModel.traverse(c => {
+                        if (c.isMesh && c.material) {
+                            c.material = c.material.clone();
+                            if (c.material.emissiveMap && !c.material.map) c.material.map = c.material.emissiveMap;
+                            if (c.material.emissive) c.material.emissive.set(0, 0, 0);
+                            c.material.emissiveIntensity = 0;
+                            c.material.emissiveMap = null;
+                            c.material.needsUpdate = true;
                         }
                     });
-                    // No mixer animation -- clip0 has root motion that fights positioning
-                    // Head sway is done manually on the bone in animate()
+                    bgShoulder.add(bmModel);
+                } catch (e) { console.warn('Boombox load failed:', e); }
+            }
 
-                    // Setup hat cycling on tap
-                    this.setupHatCycling();
-                    // Create floating market cap speech bubble
-                    this._createMarketCapBubble();
+            scene.add(group);
+            _bgCapybara = group;
+            _bgCapyActive = true;
+            _bgCapySpeed = (endX - startX) / 12;
+            _bgCapyEndX = endX;
+            _bgCapyGoRight = goRight;
+
+            // Animation — mixer on group (same pattern as main capybara)
+            _bgCapyMixer = new THREE.AnimationMixer(group);
+            const runClip = bgGltf.animations.find(a => a.name === 'Running');
+            if (runClip) {
+                _bgCapyMixer.clipAction(runClip).play();
+            }
+        }
+
+        function updateBgCapybara(delta) {
+            if (!_bgCapyActive || !_bgCapybara) return;
+            _bgCapybara.position.x += _bgCapySpeed * delta;
+            if (_bgCapyMixer) _bgCapyMixer.update(delta);
+            const done = _bgCapyGoRight
+                ? _bgCapybara.position.x > _bgCapyEndX
+                : _bgCapybara.position.x < _bgCapyEndX;
+            if (done) {
+                scene.remove(_bgCapybara);
+                _bgCapybara = null;
+                _bgCapyActive = false;
+                _bgCapyMixer = null;
+            }
+        }
+
+        // ============================================================
+        // MARKET CAP SPEECH BUBBLE
+        // ============================================================
+        let _mcapBubble = null;
+        let _mcapBubbleMat = null;
+        let _mcapBubbleCanvas = null;
+        const _bubbleCamRight = new THREE.Vector3();
+        const _bubbleCamFwd = new THREE.Vector3();
+        const _bubbleHeadPos = new THREE.Vector3();
+
+        function formatMcap(v) {
+            if (v == null) return '...';
+            if (v >= 1_000_000_000) return `$${(v / 1_000_000_000).toFixed(2)}B`;
+            if (v >= 1_000_000)     return `$${(v / 1_000_000).toFixed(2)}M`;
+            if (v >= 1_000)         return `$${(v / 1_000).toFixed(1)}K`;
+            return `$${Math.round(v)}`;
+        }
+
+        function drawBubble(text) {
+            if (!_mcapBubbleCanvas) return;
+            const W = _mcapBubbleCanvas.width, H = _mcapBubbleCanvas.height;
+            const ctx = _mcapBubbleCanvas.getContext('2d');
+            ctx.clearRect(0, 0, W, H);
+            const bH = H * 0.72, bW = W * 0.88, bX = (W - bW) / 2, bY = 4;
+            const r = 18;
+            ctx.beginPath();
+            ctx.moveTo(bX + r, bY);
+            ctx.lineTo(bX + bW - r, bY);
+            ctx.quadraticCurveTo(bX + bW, bY, bX + bW, bY + r);
+            ctx.lineTo(bX + bW, bY + bH - r);
+            ctx.quadraticCurveTo(bX + bW, bY + bH, bX + bW - r, bY + bH);
+            ctx.lineTo(bX + bW * 0.86, bY + bH);
+            ctx.lineTo(W - 14, H - 2);
+            ctx.lineTo(bX + bW * 0.68, bY + bH);
+            ctx.lineTo(bX + r, bY + bH);
+            ctx.quadraticCurveTo(bX, bY + bH, bX, bY + bH - r);
+            ctx.lineTo(bX, bY + r);
+            ctx.quadraticCurveTo(bX, bY, bX + r, bY);
+            ctx.closePath();
+
+            const gold = _marketCap != null && _marketCap >= 1_000_000;
+
+            ctx.fillStyle = gold ? 'rgba(40, 28, 5, 0.88)' : 'rgba(15, 20, 30, 0.82)';
+            ctx.fill();
+            ctx.strokeStyle = gold ? 'rgba(255, 200, 60, 0.8)' : 'rgba(255, 255, 255, 0.35)';
+            ctx.lineWidth = gold ? 2.5 : 2;
+            ctx.stroke();
+
+            ctx.fillStyle = gold ? 'rgba(255, 200, 80, 0.85)' : 'rgba(180, 200, 220, 0.7)';
+            ctx.font = '500 17px Quicksand, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('$CAPYSIM', W / 2, bY + bH * 0.25);
+
+            ctx.fillStyle = gold ? '#ffd84d' : '#ffffff';
+            ctx.font = '500 28px Quicksand, sans-serif';
+            ctx.fillText(text, W / 2, bY + bH * 0.55);
+
+            ctx.fillStyle = gold ? 'rgba(255, 190, 60, 0.55)' : 'rgba(180, 200, 220, 0.5)';
+            ctx.font = '500 13px Quicksand, sans-serif';
+            ctx.fillText('mcap', W / 2, bY + bH * 0.82);
+
+            if (_mcapBubbleMat) _mcapBubbleMat.map.needsUpdate = true;
+        }
+
+        // Create bubble
+        {
+            const W = 256, H = 140;
+            const canvas = document.createElement('canvas');
+            canvas.width = W; canvas.height = H;
+            _mcapBubbleCanvas = canvas;
+            const tex = new THREE.CanvasTexture(canvas);
+            const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+            const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.71), mat);
+            mesh.position.set(0, 1.5, 0);
+            mesh.visible = false;
+            scene.add(mesh);
+            _mcapBubble = mesh;
+            _mcapBubbleMat = mat;
+            drawBubble('...');
+        }
+
+        // ============================================================
+        // RAIN / WEATHER SYSTEM
+        // ============================================================
+        let _weatherT = 0, _weatherTarget = 0;
+        const _weatherSpeed = 0.3;
+        let _rainAudio = null;
+        let _muted = false;
+        let _savedVolume = 0.3;
+
+        // Sunny baseline colors for the diorama walls -- used for rain lerp
+        // We apply weather to the diorama lighting only (not wall shaders, which stay fixed)
+        const _sunnyHemiSky = new THREE.Color(0xd4e8f0);
+        const _rainyHemiSky = new THREE.Color(0x707878);
+
+        // Rain particle system
+        const rainCount = _isMobile ? 1500 : 3000;
+        const rainSpeeds = new Float32Array(rainCount);
+        const rainSeedsY = new Float32Array(rainCount);
+        const rainXZOffsets = new Float32Array(rainCount * 2);
+        for (let i = 0; i < rainCount; i++) {
+            rainSpeeds[i] = 8 + Math.random() * 6;
+            rainSeedsY[i] = Math.random();
+            rainXZOffsets[i * 2] = (Math.random() - 0.5) * 50;
+            rainXZOffsets[i * 2 + 1] = (Math.random() - 0.5) * 50;
+        }
+        const rainGeo = new THREE.BufferGeometry();
+        const rainDummyPos = new Float32Array(rainCount * 3);
+        rainGeo.setAttribute('position', new THREE.BufferAttribute(rainDummyPos, 3));
+        rainGeo.setAttribute('aSpeed', new THREE.BufferAttribute(rainSpeeds, 1));
+        rainGeo.setAttribute('aSeedY', new THREE.BufferAttribute(rainSeedsY, 1));
+        rainGeo.setAttribute('aXZOffset', new THREE.BufferAttribute(rainXZOffsets, 2));
+
+        // Raindrop sprite texture
+        const rainCanvas = document.createElement('canvas');
+        rainCanvas.width = 8; rainCanvas.height = 128;
+        const rainCtx = rainCanvas.getContext('2d');
+        rainCtx.clearRect(0, 0, 8, 128);
+        const rainGrad = rainCtx.createLinearGradient(0, 0, 0, 128);
+        rainGrad.addColorStop(0, 'rgba(200,215,230,0)');
+        rainGrad.addColorStop(0.1, 'rgba(220,235,250,0.4)');
+        rainGrad.addColorStop(0.4, 'rgba(255,255,255,0.9)');
+        rainGrad.addColorStop(0.9, 'rgba(200,215,230,0.3)');
+        rainGrad.addColorStop(1, 'rgba(200,215,230,0)');
+        rainCtx.fillStyle = rainGrad;
+        rainCtx.fillRect(3, 0, 2, 128);
+        const rainTex = new THREE.CanvasTexture(rainCanvas);
+
+        const _rainUniforms = {
+            time: { value: 0 },
+            camPos: { value: new THREE.Vector3() },
+            opacity: { value: 0 },
+            map: { value: rainTex },
+        };
+        const rainMat = new THREE.ShaderMaterial({
+            uniforms: _rainUniforms,
+            vertexShader: `
+                attribute float aSpeed;
+                attribute float aSeedY;
+                attribute vec2  aXZOffset;
+                uniform float time;
+                uniform vec3  camPos;
+                uniform float opacity;
+                varying float vAlpha;
+                void main() {
+                    float y = mod(aSeedY * 26.0 - time * aSpeed, 27.0) - 2.0;
+                    vec3 wp = vec3(camPos.x + aXZOffset.x, y, camPos.z + aXZOffset.y);
+                    vec4 mvPos = viewMatrix * vec4(wp, 1.0);
+                    gl_Position  = projectionMatrix * mvPos;
+                    gl_PointSize = 600.0 / -mvPos.z;
+                    vAlpha = opacity;
                 }
-
-                // === LOFI MUSIC ===
-                this.setupMusic();
-
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('hud').style.display = 'flex';
-                this.setupPoints();
-                this.setupWeather();
-                this.setupMarketCap();
-                console.log('Scene built!');
-            }
-
-            setupHatCycling() {
-                // Per-hat placement offsets (world units). normalizeHatModel()
-                // already set brim to 0.55m, so just tune up/fwd here.
-                // up  = meters above bone pivot (world +Y)
-                // fwd = meters forward (world +Z, capybara faces +Z)
-                // Order must match hatFiles in loadModels()
-                const hatConfigs = [
-                    { up: 0.50, fwd: 0.0 },  // baseball
-                    { up: 0.32, fwd: -0.06 },  // graduation
-                    { up: 0.57, fwd: 0.0 },  // hardhat
-                    { up: 0.28, fwd: 0.06 },  // pirate
-                    { up: 0.54, fwd: -0.08 },  // tophat
-                    { up: 0.58, fwd: -0.04 },  // wizard
-                ];
-
-                const onTap = () => {
-                    // Cycle: -1 (none) -> 0 -> 1 -> ... -> N-1 -> -1 ...
-                    this.currentHatIndex++;
-                    if (this.currentHatIndex >= this.hatModels.length) {
-                        this.currentHatIndex = -1;
-                    }
-
-                    // Remove current hat
-                    if (this.currentHatMesh && this.currentHatMesh.parent) {
-                        this.currentHatMesh.parent.remove(this.currentHatMesh);
-                        this.currentHatMesh = null;
-                        this._currentHatCfg = null;
-                    }
-
-                    // Add new hat
-                    if (this.currentHatIndex >= 0 && this._capyHeadBone) {
-                        const hat = this.hatModels[this.currentHatIndex].clone();
-
-                        // Fix Poly Pizza materials (move emissive to diffuse like capybara)
-                        hat.traverse(c => {
-                            if (c.isMesh && c.material) {
-                                if (c.material.emissiveMap && !c.material.map) {
-                                    c.material.map = c.material.emissiveMap;
-                                    c.material.emissive.setScalar(0);
-                                    c.material.emissiveMap = null;
-                                    c.material.needsUpdate = true;
-                                }
-                            }
-                        });
-
-                        // Per-hat tweaks
-                        const cfg = hatConfigs[this.currentHatIndex] || { up: 0.50, fwd: 0.14 };
-
-                        // Hat lives in scene root (scale=1, position/rotation set per-frame in animate).
-                        hat.scale.set(1, 1, 1);
-
-                        // Per-hat tweaks (after scale reset)
-                        if (this.currentHatIndex === 0) { // baseball cap -> blue
-                            hat.traverse(c => {
-                                if (c.isMesh) {
-                                    c.material = c.material.clone();
-                                    c.material.color.setHex(0x1a3a8a);
-                                    c.material.needsUpdate = true;
-                                }
-                            });
-                        }
-                        if (this.currentHatIndex === 1) { // graduation -> rotate so tassel hangs to side
-                            hat.children[0].rotation.y = Math.PI / 2;
-                            hat.children[0].rotation.z = -Math.PI / 12; // -15° tilt
-                        }
-                        if (this.currentHatIndex === 2) { // hardhat -> rotate -90° to face forward
-                            hat.children[0].rotation.y = -Math.PI / 2;
-                            hat.children[0].position.x += 0.04;
-                        }
-                        if (this.currentHatIndex === 4) { // tophat -> 25% bigger
-                            hat.scale.set(1.25, 1.25, 1.25);
-                            hat.children[0].rotation.x = -Math.PI / 18; // -10° X rotation
-                        }
-                        if (this.currentHatIndex === 5) { // wizard -> 25% bigger
-                            hat.scale.set(1.25, 1.25, 1.25);
-                            hat.children[0].rotation.x = -7 * Math.PI / 180; // -7° X
-                        }
-                        if (this.currentHatIndex === 3) { // pirate -> 40% bigger, nudge sideways
-                            hat.scale.set(1.40, 1.40, 1.40);
-                            hat.children[0].position.x += 0.04;
-                        }
-
-                        this._currentHatCfg = cfg;
-                        this.scene.add(hat);
-                        this.currentHatMesh = hat;
-                    }
-                };
-
-                // Tap anywhere on canvas to cycle hats.
-                // Use pointer events with drag detection to avoid OrbitControls
-                // drag gestures being mistaken for taps.
-                let _ptrDown = new THREE.Vector2();
-                let _ptrMoved = false;
-                this.renderer.domElement.addEventListener('pointerdown', e => {
-                    _ptrDown.set(e.clientX, e.clientY);
-                    _ptrMoved = false;
-                });
-                this.renderer.domElement.addEventListener('pointermove', e => {
-                    if (Math.hypot(e.clientX - _ptrDown.x, e.clientY - _ptrDown.y) > 6) _ptrMoved = true;
-                });
-                this.renderer.domElement.addEventListener('pointerup', e => {
-                    if (!_ptrMoved && this._hatsEnabled) onTap();
-                });
-            }
-
-            setupMusic() {
-                this.tracks = [
-                    'audio/lofi_loop_01.mp3', 'audio/lofi_loop_02.mp3', 'audio/lofi_loop_03.mp3',
-                    'audio/lofi_loop_04.mp3', 'audio/lofi_loop_05.mp3', 'audio/lofi_loop_06.mp3',
-                    'audio/lofi_loop_07.mp3', 'audio/lofi_loop_08.mp3', 'audio/lofi_loop_09.mp3',
-                ];
-                this.currentTrack = Math.floor(Math.random() * this.tracks.length);
-                this.audio = new Audio(this.tracks[this.currentTrack]);
-                this.audio.volume = 0.3;
-
-                // When track ends, play next in loop
-                this._onTrackEnd = () => {
-                    this.currentTrack = (this.currentTrack + 1) % this.tracks.length;
-                    const vol = this.audio.volume;
-                    this.audio = new Audio(this.tracks[this.currentTrack]);
-                    this.audio.volume = vol;
-                    this.audio.addEventListener('ended', this._onTrackEnd);
-                    this.audio.play().catch(() => {});
-                };
-                this.audio.addEventListener('ended', this._onTrackEnd);
-
-                const startMusic = () => {
-                    this.audio.play().catch(() => {});
-                    document.removeEventListener('click', startMusic);
-                    document.removeEventListener('touchstart', startMusic);
-                };
-                document.addEventListener('click', startMusic);
-                document.addEventListener('touchstart', startMusic);
-                this.audio.play().catch(() => {});
-
-                // Skip button
-                document.getElementById('btn-skip').addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.currentTrack = (this.currentTrack + 1) % this.tracks.length;
-                    const wasPlaying = !this.audio.paused;
-                    const vol = this.audio.volume;
-                    this.audio.pause();
-                    this.audio = new Audio(this.tracks[this.currentTrack]);
-                    this.audio.volume = vol;
-                    this.audio.addEventListener('ended', this._onTrackEnd);
-                    if (wasPlaying) this.audio.play().catch(() => {});
-                });
-
-                // Mute toggle
-                this._muted = false;
-                this._savedVolume = this.audio.volume;
-                document.getElementById('btn-mute').addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this._muted = !this._muted;
-                    if (this._muted) {
-                        this._savedVolume = this.audio.volume;
-                        this.audio.volume = 0;
-                        if (this._rainAudio) this._rainAudio.volume = 0;
-                        if (this._thunderAudio) this._thunderAudio.volume = 0;
-                    } else {
-                        this.audio.volume = this._savedVolume;
-                    }
-                    document.getElementById('btn-mute').innerHTML = this._muted
-                        ? '<svg viewBox="0 0 24 24"><polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>'
-                        : '<svg viewBox="0 0 24 24"><polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/><path d="M15.54 8.46a5 5 0 010 7.07"/><path d="M19.07 4.93a10 10 0 010 14.14"/></svg>';
-                });
-            }
-
-            async setupPoints() {
-                this.score = 0;
-                this.scoreEl = document.getElementById('score');
-
-                // Skip SDK in capture mode
-                const isCapture = new URLSearchParams(window.location.search).has('capture');
-                if (isCapture) { this.playfun = null; }
-                // Initialize Play.fun SDK
-                try { if (isCapture) throw 'capture mode';
-                    this.playfun = new OpenGameSDK({
-                        gameId: 'f973fbb5-80b3-4ea6-a177-878eea9dbcfd',
-                        ui: { usePointsWidget: true },
-                    });
-                    await this.playfun.init();
-                    this.playfun.on('OnReady', () => console.log('Play.fun SDK ready'));
-                    this.playfun.on('error', (e) => console.warn('Play.fun error:', e));
-                    console.log('Play.fun SDK initialized');
-                } catch (e) {
-                    console.warn('Play.fun SDK not available:', e);
-                    this.playfun = null;
+            `,
+            fragmentShader: `
+                uniform sampler2D map;
+                varying float vAlpha;
+                void main() {
+                    vec4 t = texture2D(map, gl_PointCoord);
+                    if (t.a < 0.01) discard;
+                    gl_FragColor = vec4(t.rgb, t.a * vAlpha);
                 }
+            `,
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+        });
+        const _rainParticles = new THREE.Points(rainGeo, rainMat);
+        _rainParticles.frustumCulled = false;
+        scene.add(_rainParticles);
 
-                // 1 point every 10 seconds
-                setInterval(() => {
-                    this.score++;
-                    this.scoreEl.textContent = this.score;
-                    if (this.playfun) this.playfun.addPoints(1);
-                }, 10000);
+        // Rain + thunder audio
+        _rainAudio = new Audio('audio/rain_01.mp3');
+        _rainAudio.loop = true;
+        _rainAudio.volume = 0;
 
-                // Save points to server every 2 minutes
-                setInterval(() => {
-                    if (this.playfun) this.playfun.savePoints();
-                }, 120000);
+        let _rainUserVol = 0.4;
 
-                // Save on page unload
-                window.addEventListener('beforeunload', () => {
-                    if (this.playfun) this.playfun.savePoints();
-                });
+        function toggleRain() {
+            const goingRainy = _weatherTarget === 0;
+            _weatherTarget = goingRainy ? 1 : 0;
+            if (goingRainy) _rainAudio.play().catch(() => {});
+            document.getElementById('btn-rain').classList.toggle('active', goingRainy);
+            if (reactionSystem) reactionSystem.onRainToggle();
+        }
+
+        function updateWeather(delta, time) {
+            if (_weatherT < _weatherTarget) {
+                _weatherT = Math.min(_weatherT + _weatherSpeed * delta, 1);
+            } else if (_weatherT > _weatherTarget) {
+                _weatherT = Math.max(_weatherT - _weatherSpeed * delta, 0);
             }
+            const t = _weatherT;
 
-            setupWeather() {
-                // Rain particle system: GPU-driven, zero CPU per frame
-                const count = this._isMobile ? 1500 : 3000;
-                const speeds    = new Float32Array(count);
-                const seedsY    = new Float32Array(count);
-                const xzOffsets = new Float32Array(count * 2);
-                for (let i = 0; i < count; i++) {
-                    speeds[i]          = 8 + Math.random() * 6;
-                    seedsY[i]          = Math.random();
-                    xzOffsets[i * 2]   = (Math.random() - 0.5) * 50;
-                    xzOffsets[i * 2+1] = (Math.random() - 0.5) * 50;
-                }
-                const geo = new THREE.BufferGeometry();
-                const dummyPos = new Float32Array(count * 3); // GPU overrides gl_Position
-                geo.setAttribute('position',  new THREE.BufferAttribute(dummyPos, 3));
-                geo.setAttribute('aSpeed',    new THREE.BufferAttribute(speeds, 1));
-                geo.setAttribute('aSeedY',    new THREE.BufferAttribute(seedsY, 1));
-                geo.setAttribute('aXZOffset', new THREE.BufferAttribute(xzOffsets, 2));
+            // Rain GPU shader uniforms
+            _rainUniforms.time.value = time;
+            _rainUniforms.camPos.value.copy(camera.position);
+            _rainUniforms.opacity.value = t * 0.8;
 
-                // Raindrop sprite texture (same visual as before)
-                const canvas = document.createElement('canvas');
-                canvas.width = 8; canvas.height = 128;
-                const ctx = canvas.getContext('2d');
-                ctx.clearRect(0, 0, 8, 128);
-                const grad = ctx.createLinearGradient(0, 0, 0, 128);
-                grad.addColorStop(0,   'rgba(200,215,230,0)');
-                grad.addColorStop(0.1, 'rgba(220,235,250,0.4)');
-                grad.addColorStop(0.4, 'rgba(255,255,255,0.9)');
-                grad.addColorStop(0.9, 'rgba(200,215,230,0.3)');
-                grad.addColorStop(1,   'rgba(200,215,230,0)');
-                ctx.fillStyle = grad;
-                ctx.fillRect(3, 0, 2, 128);
-                const tex = new THREE.CanvasTexture(canvas);
+            // Lighting lerps for diorama
+            sun.intensity = 1.2 - t * 0.9;
+            hemiLight.color.lerpColors(_sunnyHemiSky, _rainyHemiSky, t);
+            ambientLight.intensity = 0.4 + t * 0.15;
 
-                this._rainUniforms = {
-                    time:    { value: 0 },
-                    camPos:  { value: new THREE.Vector3() },
-                    opacity: { value: 0 },
-                    map:     { value: tex },
-                };
-                const mat = new THREE.ShaderMaterial({
-                    uniforms: this._rainUniforms,
-                    vertexShader: `
-                        attribute float aSpeed;
-                        attribute float aSeedY;
-                        attribute vec2  aXZOffset;
-                        uniform float time;
-                        uniform vec3  camPos;
-                        uniform float opacity;
-                        varying float vAlpha;
-                        void main() {
-                            float y = mod(aSeedY * 26.0 - time * aSpeed, 27.0) - 2.0;
-                            vec3 wp = vec3(camPos.x + aXZOffset.x, y, camPos.z + aXZOffset.y);
-                            vec4 mvPos = viewMatrix * vec4(wp, 1.0);
-                            gl_Position  = projectionMatrix * mvPos;
-                            gl_PointSize = 600.0 / -mvPos.z;
-                            vAlpha = opacity;
-                        }
-                    `,
-                    fragmentShader: `
-                        uniform sampler2D map;
-                        varying float vAlpha;
-                        void main() {
-                            vec4 t = texture2D(map, gl_PointCoord);
-                            if (t.a < 0.01) discard;
-                            gl_FragColor = vec4(t.rgb, t.a * vAlpha);
-                        }
-                    `,
-                    transparent: true,
-                    depthWrite:  false,
-                    blending:    THREE.AdditiveBlending,
-                });
-                this._rainParticles = new THREE.Points(geo, mat);
-                this._rainParticles.frustumCulled = false;
-                this.scene.add(this._rainParticles);
-
-                // Rain ambient audio
-                this._rainAudio = new Audio('audio/rain_01.mp3');
-                this._rainAudio.loop = true;
-                this._rainAudio.volume = 0;
-
-                // Thunder audio (plays during $1M standing FX)
-                this._thunderAudio = new Audio('audio/thunder_01.mp3');
-                this._thunderAudio.loop = true;
-                this._thunderAudio.volume = 0;
-
-                // Store sunny baseline colors for lerping
-                this._sunnyBg = new THREE.Color(0xc8dce8);
-                this._rainyBg = new THREE.Color(0x5a6268);
-                this._sunnyFog = new THREE.Color(0xc5d8c5);
-                this._rainyFog = new THREE.Color(0x6a7570);
-                this._sunnySkyTop = new THREE.Color(0x87CEEB);
-                this._rainySkyTop = new THREE.Color(0x505860);
-                this._sunnySkyBot = new THREE.Color(0xd0ddd0);
-                this._rainySkyBot = new THREE.Color(0x788080);
-                this._sunnyHemiSky = new THREE.Color(0xd4e8f0);
-                this._rainyHemiSky = new THREE.Color(0x707878);
-
-                // Rain toggle button
-                this._rainUserVol = 0.4; // user's preferred rain volume
-                document.getElementById('btn-rain').addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.toggleRain();
-                });
-
+            // Rain audio
+            if (_rainAudio) {
+                _rainAudio.volume = _muted ? 0 : t * _rainUserVol;
+                if (t === 0 && !_rainAudio.paused) _rainAudio.pause();
             }
+        }
 
-            toggleRain() {
-                const goingRainy = this._weatherTarget === 0;
-                this._weatherTarget = goingRainy ? 1 : 0;
-                if (goingRainy) {
-                    this._rainAudio.play().catch(() => {});
-                }
-                document.getElementById('btn-rain').classList.toggle('active', goingRainy);
+
+        // ============================================================
+        // LOFI MUSIC
+        // ============================================================
+        const tracks = [
+            'audio/lofi_loop_01.mp3', 'audio/lofi_loop_02.mp3', 'audio/lofi_loop_03.mp3',
+            'audio/lofi_loop_04.mp3', 'audio/lofi_loop_05.mp3', 'audio/lofi_loop_06.mp3',
+            'audio/lofi_loop_07.mp3', 'audio/lofi_loop_08.mp3', 'audio/lofi_loop_09.mp3',
+        ];
+        let currentTrack = Math.floor(Math.random() * tracks.length);
+        let audio = new Audio(tracks[currentTrack]);
+        audio.volume = 0.3;
+        audio.preload = 'auto'; // preload so it's ready on tap
+
+        function onTrackEnd() {
+            currentTrack = (currentTrack + 1) % tracks.length;
+            const vol = audio.volume;
+            audio = new Audio(tracks[currentTrack]);
+            audio.volume = vol;
+            audio.addEventListener('ended', onTrackEnd);
+            audio.play().catch(() => {});
+        }
+        audio.addEventListener('ended', onTrackEnd);
+
+        // Skip button
+        document.getElementById('btn-skip').addEventListener('click', (e) => {
+            e.stopPropagation();
+            currentTrack = (currentTrack + 1) % tracks.length;
+            const wasPlaying = !audio.paused;
+            const vol = audio.volume;
+            audio.pause();
+            audio = new Audio(tracks[currentTrack]);
+            audio.volume = vol;
+            audio.addEventListener('ended', onTrackEnd);
+            if (wasPlaying) audio.play().catch(() => {});
+            if (reactionSystem) reactionSystem.onMusicSkip();
+        });
+
+        // Mute toggle
+        _savedVolume = audio.volume;
+        document.getElementById('btn-mute').addEventListener('click', (e) => {
+            e.stopPropagation();
+            _muted = !_muted;
+            if (_muted) {
+                _savedVolume = audio.volume;
+                audio.volume = 0;
+                if (_rainAudio) _rainAudio.volume = 0;
+            } else {
+                audio.volume = _savedVolume;
             }
+            document.getElementById('btn-mute').innerHTML = _muted
+                ? '<svg viewBox="0 0 24 24"><polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>'
+                : '<svg viewBox="0 0 24 24"><polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/><path d="M15.54 8.46a5 5 0 010 7.07"/><path d="M19.07 4.93a10 10 0 010 14.14"/></svg>';
+        });
 
-            _updateWeather(delta, time) {
-                // Lerp toward target
-                if (this._weatherT < this._weatherTarget) {
-                    this._weatherT = Math.min(this._weatherT + this._weatherSpeed * delta, 1);
-                } else if (this._weatherT > this._weatherTarget) {
-                    this._weatherT = Math.max(this._weatherT - this._weatherSpeed * delta, 0);
-                }
-                const t = this._weatherT;
+        // Rain toggle button
+        document.getElementById('btn-rain').addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleRain();
+        });
 
-                // Rain: GPU shader — just update uniforms, zero CPU particle work
-                if (this._rainUniforms) {
-                    this._rainUniforms.time.value    = time;
-                    this._rainUniforms.camPos.value.copy(this.camera.position);
-                    this._rainUniforms.opacity.value = t * 0.8;
-                }
+        // ============================================================
+        // POINTS / VIBES
+        // ============================================================
+        let score = 0;
+        const scoreEl = document.getElementById('score');
+        let playfun = null;
 
-                // Atmosphere lerps
-                this.scene.background.lerpColors(this._sunnyBg, this._rainyBg, t);
-                this.scene.fog.color.lerpColors(this._sunnyFog, this._rainyFog, t);
-                this.scene.fog.density = 0.014 + t * 0.011;
+        const isCapture = new URLSearchParams(window.location.search).has('capture');
+        try {
+            if (isCapture) throw 'capture mode';
+            playfun = new OpenGameSDK({
+                gameId: 'f973fbb5-80b3-4ea6-a177-878eea9dbcfd',
+                ui: { usePointsWidget: true },
+            });
+            await playfun.init();
+            playfun.on('OnReady', () => console.log('Play.fun SDK ready'));
+            playfun.on('error', (e) => console.warn('Play.fun error:', e));
+            console.log('Play.fun SDK initialized');
+        } catch (e) {
+            console.warn('Play.fun SDK not available:', e);
+            playfun = null;
+        }
 
-                // Sky dome
-                if (this._skyMat) {
-                    this._skyMat.uniforms.topColor.value.lerpColors(this._sunnySkyTop, this._rainySkyTop, t);
-                    this._skyMat.uniforms.bottomColor.value.lerpColors(this._sunnySkyBot, this._rainySkyBot, t);
-                }
+        // 1 point every 10 seconds
+        setInterval(() => {
+            score++;
+            scoreEl.textContent = score;
+            if (playfun) playfun.addPoints(1);
+        }, 10000);
 
-                // Lighting
-                this._sun.intensity = 1.2 - t * 0.9;
-                this._hemi.color.lerpColors(this._sunnyHemiSky, this._rainyHemiSky, t);
-                this._ambient.intensity = 0.4 + t * 0.15;
+        // Save points every 2 minutes
+        setInterval(() => {
+            if (playfun) playfun.savePoints();
+        }, 120000);
 
-                // Rain audio volume (user-controlled max, fades with weather)
-                if (this._rainAudio) {
-                    this._rainAudio.volume = this._muted ? 0 : t * (this._rainUserVol || 0.4);
-                    if (t === 0 && !this._rainAudio.paused) this._rainAudio.pause();
-                }
-            }
+        window.addEventListener('beforeunload', () => {
+            if (playfun) playfun.savePoints();
+        });
 
-            testStand() {
-                this._testLock = true; // freeze WS updates during test
-                this._marketCap = 900_000;
-                this._updateMarketCapBubble();
-                const step = 10_000;
-                console.log('[testStand] ramping $900K → $1M (WS paused)...');
-                const timer = setInterval(() => {
-                    this._marketCap += step;
-                    this._updateMarketCapBubble();
-                    this._updateCapyStanding();
-                    console.log('[testStand]', this.formatMcap(this._marketCap));
-                    if (this._marketCap >= 1_000_000) {
-                        clearInterval(timer);
-                        this._testLock = false; // resume WS
-                        console.log('[testStand] done — WS resumed');
-                    }
-                }, 1000);
-            }
+        // ============================================================
+        // MARKET CAP WEBSOCKET
+        // ============================================================
+        {
+            const MINT = 'LWPihkg8SWDiAzG5TXAsgQuJeSZ3cXem1VStNX8PLAY';
+            const THROTTLE_MS = 5 * 60 * 1000;
+            let lastUpdate = 0;
+            let _testLock = false;
 
-            formatMcap(v) {
-                if (v == null) return '...';
-                if (v >= 1_000_000_000) return `$${(v / 1_000_000_000).toFixed(2)}B`;
-                if (v >= 1_000_000)     return `$${(v / 1_000_000).toFixed(2)}M`;
-                if (v >= 1_000)         return `$${(v / 1_000).toFixed(1)}K`;
-                return `$${Math.round(v)}`;
-            }
-
-            setupMarketCap() {
-                const MINT = 'LWPihkg8SWDiAzG5TXAsgQuJeSZ3cXem1VStNX8PLAY';
-                const THROTTLE_MS = 5 * 60 * 1000; // 5 minutes
-                let lastUpdate = 0;
-
+            try {
                 const socket = io('wss://ws.play.fun/realtime', {
                     transports: ['websocket'],
                     reconnection: true,
@@ -1176,26 +1102,18 @@
                     console.log('[mcap] connected:', socket.id);
                     socket.emit('join-mint', MINT);
                 });
-                socket.on('disconnect', (reason) => {
-                    console.warn('[mcap] disconnected:', reason);
-                });
-                socket.on('connect_error', (err) => {
-                    console.warn('[mcap] connection error:', err.message);
-                });
+                socket.on('disconnect', (reason) => console.warn('[mcap] disconnected:', reason));
+                socket.on('connect_error', (err) => console.warn('[mcap] connection error:', err.message));
                 socket.on('token-updates', (batch) => {
-                    if (this._testLock) return;
+                    if (_testLock) return;
                     const now = Date.now();
                     const doVisualUpdate = lastUpdate === 0 || now - lastUpdate >= THROTTLE_MS;
                     for (const u of batch.updates) {
                         if (u.mint !== MINT) continue;
-                        this._marketCap = u.marketCap;
-                        // Always check standing so animation never misses a $1M cross
-                        const prevStanding = this._capyStanding;
-                        this._updateCapyStanding();
-                        // Redraw bubble on first update, every 5 min, or if standing changed
-                        if (doVisualUpdate || this._capyStanding !== prevStanding) {
-                            if (doVisualUpdate) lastUpdate = now;
-                            this._updateMarketCapBubble();
+                        _marketCap = u.marketCap;
+                        if (doVisualUpdate) {
+                            lastUpdate = now;
+                            drawBubble(formatMcap(_marketCap));
                         }
                     }
                 });
@@ -1203,358 +1121,327 @@
                     socket.emit('leave-mint', MINT);
                     socket.disconnect();
                 });
-            }
-
-            _createMarketCapBubble() {
-                const W = 256, H = 140;
-                const canvas = document.createElement('canvas');
-                canvas.width = W; canvas.height = H;
-                this._mcapBubbleCanvas = canvas;
-
-                const tex = new THREE.CanvasTexture(canvas);
-                const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide });
-                const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.71), mat);
-                mesh.position.set(0, 1.5, 0); // updated every frame in animate()
-                mesh.visible = false; // hidden — standing trigger still active
-                this.scene.add(mesh);
-                this._mcapBubble = mesh;
-                this._mcapBubbleMat = mat;
-
-                this._drawBubble('...');
-            }
-
-            _drawBubble(text) {
-                const canvas = this._mcapBubbleCanvas;
-                if (!canvas) return;
-                const W = canvas.width, H = canvas.height;
-                const ctx = canvas.getContext('2d');
-                ctx.clearRect(0, 0, W, H);
-
-                // Bubble body (rounded rect)
-                const bH = H * 0.72, bW = W * 0.88, bX = (W - bW) / 2, bY = 4;
-                const r = 18;
-                ctx.beginPath();
-                ctx.moveTo(bX + r, bY);
-                ctx.lineTo(bX + bW - r, bY);
-                ctx.quadraticCurveTo(bX + bW, bY, bX + bW, bY + r);
-                ctx.lineTo(bX + bW, bY + bH - r);
-                ctx.quadraticCurveTo(bX + bW, bY + bH, bX + bW - r, bY + bH);
-                // Tail: angled from bottom-right toward capybara head (lower-right)
-                ctx.lineTo(bX + bW * 0.86, bY + bH);
-                ctx.lineTo(W - 14, H - 2);   // tip — bottom-right corner
-                ctx.lineTo(bX + bW * 0.68, bY + bH);
-                ctx.lineTo(bX + r, bY + bH);
-                ctx.quadraticCurveTo(bX, bY + bH, bX, bY + bH - r);
-                ctx.lineTo(bX, bY + r);
-                ctx.quadraticCurveTo(bX, bY, bX + r, bY);
-                ctx.closePath();
-
-                const gold = this._marketCap != null && this._marketCap >= 1_000_000;
-
-                // Fill
-                ctx.fillStyle = gold ? 'rgba(40, 28, 5, 0.88)' : 'rgba(15, 20, 30, 0.82)';
-                ctx.fill();
-                // Border
-                ctx.strokeStyle = gold ? 'rgba(255, 200, 60, 0.8)' : 'rgba(255, 255, 255, 0.35)';
-                ctx.lineWidth = gold ? 2.5 : 2;
-                ctx.stroke();
-
-                // Label
-                ctx.fillStyle = gold ? 'rgba(255, 200, 80, 0.85)' : 'rgba(180, 200, 220, 0.7)';
-                ctx.font = '500 17px Quicksand, sans-serif';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText('$CAPYSIM', W / 2, bY + bH * 0.25);
-
-                // Value
-                ctx.fillStyle = gold ? '#ffd84d' : '#ffffff';
-                ctx.font = '500 28px Quicksand, sans-serif';
-                ctx.fillText(text, W / 2, bY + bH * 0.55);
-
-                // mcap sub-label
-                ctx.fillStyle = gold ? 'rgba(255, 190, 60, 0.55)' : 'rgba(180, 200, 220, 0.5)';
-                ctx.font = '500 13px Quicksand, sans-serif';
-                ctx.fillText('mcap', W / 2, bY + bH * 0.82);
-
-                if (this._mcapBubbleMat) this._mcapBubbleMat.map.needsUpdate = true;
-            }
-
-            _updateMarketCapBubble() {
-                this._drawBubble(this.formatMcap(this._marketCap));
-            }
-
-            async _loadStandingCapybara(loader) {
-                try {
-                    const gltf = await new Promise((resolve, reject) => {
-                        loader.load('models/capybara-standing.glb', resolve, undefined, reject);
-                    });
-                    const capy = gltf.scene;
-                    const box = new THREE.Box3().setFromObject(capy);
-                    const size = box.getSize(new THREE.Vector3());
-                    console.log('[capybara-stands] standing model size:', size.x.toFixed(2), size.y.toFixed(2), size.z.toFixed(2));
-                    const scaleFactor = 1.0 / (size.y || 0.001);
-                    const standGroup = new THREE.Group();
-                    standGroup.add(capy);
-                    capy.scale.set(scaleFactor, scaleFactor, scaleFactor);
-                    standGroup.position.y = -0.05;
-                    standGroup.visible = false; // hidden until $1M threshold
-
-                    capy.traverse(c => {
-                        if (c.isMesh) {
-                            c.castShadow = true;
-                            c.receiveShadow = true;
-                            if (c.material) {
-                                c.material = c.material.clone();
-                                if (c.material.emissiveMap && !c.material.map) {
-                                    c.material.map = c.material.emissiveMap;
-                                }
-                                c.material.emissive.set(0, 0, 0);
-                                c.material.emissiveIntensity = 0;
-                                c.material.emissiveMap = null;
-                                c.material.metalness = 0;
-                                c.material.roughness = 0.8;
-                                c.material.needsUpdate = true;
-                            }
-                        }
-                        // Head bone — biped model uses capital 'Head'
-                        if ((c.name === 'Head' || c.name === 'head') && c.isBone) {
-                            this._standingHeadBone = c;
-                            this._standingHeadBaseRotY = c.rotation.y;
-                            this._standingHeadBaseRotZ = c.rotation.z;
-                            this._standingHeadBaseRotX = c.rotation.x;
-                        }
-                    });
-
-                    this.scene.add(standGroup);
-                    this._standingCapybara = standGroup;
-
-                    // AnimationMixer for stand-up + idle clips
-                    this._standMixer = new THREE.AnimationMixer(standGroup);
-                    const upClip = gltf.animations.find(a => a.name.toLowerCase().includes('stand'));
-                    const idleClip = gltf.animations.find(a => a.name.toLowerCase().includes('idle'));
-                    console.log('[capybara-stands] animations found:', gltf.animations.map(a => a.name));
-                    if (upClip) {
-                        this._standUpAction = this._standMixer.clipAction(upClip);
-                        this._standUpAction.loop = THREE.LoopOnce;
-                        this._standUpAction.clampWhenFinished = true;
-                    }
-                    if (idleClip) {
-                        this._standIdleAction = this._standMixer.clipAction(idleClip);
-                        this._standIdleAction.loop = THREE.LoopRepeat;
-                    }
-                    // When stand-up finishes → transition to idle
-                    this._standMixer.addEventListener('finished', (e) => {
-                        if (e.action === this._standUpAction && this._capyStanding) {
-                            this._standIdleAction.reset().play();
-                        }
-                    });
-
-                    // Create halo effect
-                    this._createStandHalo();
-                    console.log('[capybara-stands] standing model loaded ✓');
-                } catch (e) {
-                    console.log('[capybara-stands] standing model not yet available — feature dormant');
-                    this._standingCapybara = null;
-                }
-            }
-
-            _createStandHalo() {
-                // SpotLight above, pointing straight down to illuminate her body
-                this._standHaloLight = new THREE.SpotLight(0xfff0cc, 0, 8, Math.PI / 5, 0.35);
-                this._standHaloLight.position.set(0, 3.5, 0);
-                this._standHaloLight.target.position.set(0, 0, 0);
-                this.scene.add(this._standHaloLight);
-                this.scene.add(this._standHaloLight.target);
-
-                // Rim light from behind — golden silhouette glow around her body
-                this._standRimLight = new THREE.PointLight(0xffd060, 0, 5);
-                this._standRimLight.position.set(0, 0.9, -1.4); // behind her
-                this.scene.add(this._standRimLight);
-
-                // Soft fill light from the front — reveals her face during the darkness
-                this._standFillLight = new THREE.PointLight(0xfff4e0, 0, 5);
-                this._standFillLight.position.set(0, 0.8, 2.2); // in front, at body height
-                this.scene.add(this._standFillLight);
-            }
-
-            _triggerStandFX() {
-                if (!this._standingCapybara) return;
-                // Hide hat and disable tap while standing
-                this._hatsEnabled = false;
-                if (this.currentHatMesh) this.currentHatMesh.visible = false;
-                // Phase 1: start darkening immediately, capybara still sitting
-                this._standFXTarget = 1;
-                // Lightning flickers — 3 flashes timed roughly with thunder booms
-                this._lightningFlash = 1.0;
-                setTimeout(() => { this._lightningFlash = 1.0; }, 420);
-                setTimeout(() => { this._lightningFlash = 0.85; }, 900);
-
-                // Thunder: play exactly three times
-                if (this._thunderAudio) {
-                    this._thunderAudio.loop = false;
-                    this._thunderPlayCount = 0;
-                    this._thunderAudio.currentTime = 0;
-                    this._thunderAudio.play().catch(() => {});
-                    this._thunderAudio.onended = () => {
-                        this._thunderPlayCount = (this._thunderPlayCount || 0) + 1;
-                        if (this._thunderPlayCount < 3) {
-                            this._thunderAudio.currentTime = 0;
-                            this._thunderAudio.play().catch(() => {});
-                        } else {
-                            this._thunderAudio.onended = null;
-                        }
-                    };
-                }
-                // Phase 2: after 3s of darkness, swap model and play stand-up
-                clearTimeout(this._standRevealTimer);
-                this._standRevealTimer = setTimeout(() => {
-                    if (!this._capyStanding) return; // mcap dropped before reveal
-                    if (this.capybara) this.capybara.visible = false;
-                    this._standingCapybara.visible = true;
-                    if (this._standMixer) {
-                        this._standMixer.stopAllAction();
-                        if (this._standUpAction) this._standUpAction.reset().play();
-                        else if (this._standIdleAction) this._standIdleAction.reset().play();
-                    }
-                    // Auto-revert FX after 15s more — capybara stays standing
-                    this._standRevealTimer = setTimeout(() => {
-                        this._standFXTarget = 0;
-                    }, 15000);
-                }, 3000);
-            }
-
-            _revertStandFX() {
-                clearTimeout(this._standRevealTimer);
-                this._standFXTarget = 0;
-                this._lightningFlash = 0;
-                // Restore hat
-                this._hatsEnabled = true;
-                if (this.currentHatMesh) this.currentHatMesh.visible = true;
-                if (this.capybara) this.capybara.visible = true;
-                if (this._standingCapybara) this._standingCapybara.visible = false;
-                if (this._standMixer) this._standMixer.stopAllAction();
-            }
-
-            _updateStandFX(delta) {
-                if (this._standFXt === this._standFXTarget && this._standFXt === 0) return;
-                if (this._standFXt < this._standFXTarget)
-                    this._standFXt = Math.min(this._standFXt + this._standFXSpeed * delta, 1);
-                else
-                    this._standFXt = Math.max(this._standFXt - this._standFXSpeed * delta, 0);
-                const t = this._standFXt;
-
-                // Override all lighting — runs after _updateWeather so these win
-                this._sun.intensity = THREE.MathUtils.lerp(1.2, 0.0, t);
-                this._hemi.intensity = THREE.MathUtils.lerp(1.0, 0.0, t);
-                this._hemi.color.lerpColors(this._sunnyHemiSky, new THREE.Color(0x050510), t);
-                this._ambient.intensity = THREE.MathUtils.lerp(0.4, 0.05, t);
-                this.scene.background.lerpColors(this._sunnyBg, new THREE.Color(0x000005), t);
-                // Sky dome shader uniforms
-                if (this._skyMat) {
-                    this._skyMat.uniforms.topColor.value.lerpColors(this._sunnySkyTop, new THREE.Color(0x000005), t);
-                    this._skyMat.uniforms.bottomColor.value.lerpColors(this._sunnySkyBot, new THREE.Color(0x000005), t);
-                }
-                // Lightning flicker — brief blue-white spike on top of dark sky
-                if (this._lightningFlash > 0) {
-                    this._lightningFlash = Math.max(0, this._lightningFlash - delta * 7);
-                    const _fc = new THREE.Color(0x99aaff);
-                    const _fi = this._lightningFlash * 0.75;
-                    this.scene.background.lerp(_fc, _fi);
-                    if (this._skyMat) {
-                        this._skyMat.uniforms.topColor.value.lerp(_fc, _fi);
-                        this._skyMat.uniforms.bottomColor.value.lerp(_fc, _fi);
-                    }
-                    this._sun.intensity += this._lightningFlash * 3.0;
-                    this._ambient.intensity += this._lightningFlash * 1.5;
-                }
-                this.scene.fog.color.lerpColors(this._sunnyFog, new THREE.Color(0x060612), t);
-                this.scene.fog.density = THREE.MathUtils.lerp(0.014, 0.03, t);
-
-                // Thunder audio
-                if (this._thunderAudio) {
-                    this._thunderAudio.volume = this._muted ? 0 : t * 0.75;
-                    if (t === 0 && !this._thunderAudio.paused) this._thunderAudio.pause();
-                }
-                // Halo point light
-                if (this._standHaloLight) this._standHaloLight.intensity = t * 5.0;
-                if (this._standRimLight)  this._standRimLight.intensity  = t * 4.0;
-                if (this._standFillLight) this._standFillLight.intensity = t * 1.8;
-            }
-
-            _updateCapyStanding() {
-                const shouldStand = this._marketCap != null && this._marketCap >= 1_000_000;
-                if (shouldStand === this._capyStanding) return;
-                this._capyStanding = shouldStand;
-                if (shouldStand) this._triggerStandFX();
-                else this._revertStandFX();
-            }
-
-            animate() {
-                requestAnimationFrame(() => this.animate());
-                const delta = this.clock.getDelta();
-                const time = this.clock.elapsedTime;
-
-                // Advance standing model animations FIRST (head sway below will override mixer head)
-                if (this._standMixer) this._standMixer.update(delta);
-
-                // Head sway - slow, like she's vibing to the music (works on whichever model is active)
-                const _activeHeadBone = this._capyStanding ? this._standingHeadBone : this._capyHeadBone;
-                const _activeBaseRotY = this._capyStanding ? this._standingHeadBaseRotY : this._headBaseRotY;
-                const _activeBaseRotZ = this._capyStanding ? this._standingHeadBaseRotZ : this._headBaseRotZ;
-                const _activeBaseRotX = this._capyStanding ? this._standingHeadBaseRotX : this._headBaseRotX;
-                if (_activeHeadBone) {
-                    _activeHeadBone.rotation.y = _activeBaseRotY + Math.sin(time * 0.8) * 0.12;
-                    _activeHeadBone.rotation.z = _activeBaseRotZ + Math.sin(time * 0.55 + 0.7) * 0.06;
-                    _activeHeadBone.rotation.x = _activeBaseRotX + Math.sin(time * 0.5 + 1.2) * 0.04;
-                }
-
-                // Mcap bubble: follow head bone, offset screen-left, always face camera
-                if (this._mcapBubble) {
-                    // Use whichever head bone is currently active
-                    const _bubbleBone = this._capyStanding ? this._standingHeadBone : this._capyHeadBone;
-                    if (_bubbleBone) {
-                        _bubbleBone.getWorldPosition(this._bubbleHeadPos);
-                        this._bubbleCamRight.setFromMatrixColumn(this.camera.matrixWorld, 0);
-                        this._bubbleCamFwd.setFromMatrixColumn(this.camera.matrixWorld, 2);
-                        this._mcapBubble.position.copy(this._bubbleHeadPos)
-                            .addScaledVector(this._bubbleCamRight, -1.1)
-                            .addScaledVector(this._bubbleCamFwd, 0.7);
-                        this._mcapBubble.position.y += 0.65;
-                        this._mcapBubble.lookAt(this.camera.position);
-                    }
-                }
-
-                // Hat follows head bone as a prop (offset rotates with bone)
-                if (this.currentHatMesh && this._capyHeadBone && this._currentHatCfg) {
-                    this._capyHeadBone.getWorldPosition(this._hatFollowPos);
-                    this._capyHeadBone.getWorldQuaternion(this._hatFollowQuat);
-                    const cfg = this._currentHatCfg;
-                    // Offset in bone-local space: +Y = fwd, -Z = up
-                    this._hatOffset.set(0, cfg.fwd, -cfg.up);
-                    this._hatOffset.applyQuaternion(this._hatFollowQuat);
-                    this.currentHatMesh.position.copy(this._hatFollowPos).add(this._hatOffset);
-                    // Orientation: bone quat + correction (-90° X) so hat stays upright
-                    this.currentHatMesh.quaternion.copy(this._hatFollowQuat)
-                        .multiply(this._hatCorrectionQuat);
-                }
-
-                for (const fm of this._flowerInstancedMeshes) {
-                    fm.material.userData.uniforms.windTime.value = time;
-                }
-
-                // Weather transitions
-                if (this._rainParticles) this._updateWeather(delta, time);
-
-                // Standing FX (runs AFTER weather so lighting values override rain when active)
-                if (this._standFXt > 0 || this._standFXTarget > 0) this._updateStandFX(delta);
-
-                this.controls.update();
-                this.renderer.render(this.scene, this.camera);
+            } catch (e) {
+                console.warn('[mcap] WebSocket setup failed:', e);
             }
         }
 
-        window.addEventListener('load', () => {
-            window.game = new CapybaraSimulator();
+        // ============================================================
+        // HIDE LOADING, SHOW HUD
+        // ============================================================
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('hud').style.display = 'flex';
+
+        // ============================================================
+        // OFF-AXIS PROJECTION -- THE DIORAMA EFFECT
+        // ============================================================
+        // Uses THREE.CameraUtils.frameCorners() -- the battle-tested
+        // Three.js utility for off-axis projection.
+        //
+        // Define the screen rectangle (room opening) as 3 corner points.
+        // The camera position = viewer eye position.
+        // frameCorners() computes the correct asymmetric frustum
+        // so the scene looks like it's behind a physical window.
+
+        // Screen rectangle = the room opening (z = roomZ + roomD)
+        const screenZ = roomZ + roomD;
+
+        // 3 corners of the screen rectangle in world space
+        const bottomLeftCorner  = new THREE.Vector3(-roomW / 2, 0,     screenZ);
+        const bottomRightCorner = new THREE.Vector3( roomW / 2, 0,     screenZ);
+        const topLeftCorner     = new THREE.Vector3(-roomW / 2, roomH, screenZ);
+
+        // Base camera position (center of screen, camDist in front)
+        const baseCamX = 0;
+        const baseCamY = roomH / 2;
+        const baseCamZ = screenZ + camDist;
+
+        // Eye input (normalized -1 to 1)
+        let eyeInputX = 0, eyeInputY = 0, eyeInputZ = 0;
+        let _lastFaceSeenTime = 0;
+        let _baseZ = null; // baseline Z from first face detection — your normal sitting distance
+        let smoothX = 0, smoothY = 0;
+        const smoothing = 0.25; // reference uses 0.3, fast response without jitter
+
+        // === FACE TRACKING (primary on all devices) ===
+        let faceTrackingActive = false;
+        let faceVideo = null;
+        let faceMesh = null;
+
+        let faceError = '';
+
+        // Pre-load MediaPipe: use inline module script to import and expose on window
+        const mpScript = document.createElement('script');
+        mpScript.type = 'module';
+        mpScript.textContent = `
+            import { FilesetResolver, FaceLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.33/vision_bundle.mjs';
+            window.__MP_FilesetResolver = FilesetResolver;
+            window.__MP_FaceLandmarker = FaceLandmarker;
+            window.dispatchEvent(new Event('mediapipe-ready'));
+        `;
+        document.head.appendChild(mpScript);
+
+        async function startFaceTracking() {
+            try {
+                faceError = 'getting camera...';
+
+                // Step 1: Get camera FIRST (needs user gesture on iOS)
+                faceVideo = document.createElement('video');
+                faceVideo.setAttribute('playsinline', '');
+                faceVideo.setAttribute('autoplay', '');
+                faceVideo.style.display = 'none';
+                document.body.appendChild(faceVideo);
+
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'user', width: { ideal: 320 }, height: { ideal: 240 } },
+                });
+                faceVideo.srcObject = stream;
+                await faceVideo.play();
+                faceError = 'camera OK, waiting for AI lib...';
+
+                // Step 2: Wait for MediaPipe module to load
+                await new Promise((resolve, reject) => {
+                    if (window.__MP_FilesetResolver) { resolve(); return; }
+                    window.addEventListener('mediapipe-ready', resolve, { once: true });
+                    setTimeout(() => reject(new Error('MediaPipe load timeout (15s)')), 15000);
+                });
+
+                if (!window.__MP_FilesetResolver || !window.__MP_FaceLandmarker) {
+                    throw new Error('MediaPipe globals not found');
+                }
+
+                faceError = 'AI loaded, init model...';
+
+                const filesetResolver = await window.__MP_FilesetResolver.forVisionTasks(
+                    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.33/wasm'
+                );
+                faceMesh = await window.__MP_FaceLandmarker.createFromOptions(filesetResolver, {
+                    baseOptions: {
+                        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+                        delegate: 'GPU',
+                    },
+                    runningMode: 'VIDEO',
+                    numFaces: 1,
+                    outputFaceBlendshapes: false,
+                    outputFacialTransformationMatrixes: true,
+                });
+
+                faceTrackingActive = true;
+                faceError = 'RUNNING';
+            } catch (e) {
+                faceError = 'FAIL: ' + (e.message || e);
+                console.warn('[face] failed:', e);
+            }
+        }
+
+        // Track whether face is actually being detected right now
+        let faceDetected = false;
+
+        function updateFaceTracking() {
+            if (!faceTrackingActive || !faceVideo || faceVideo.readyState < 2 || !faceMesh) return;
+            const results = faceMesh.detectForVideo(faceVideo, performance.now());
+            if (results.facialTransformationMatrixes && results.facialTransformationMatrixes.length > 0) {
+                const mat = results.facialTransformationMatrixes[0].data;
+                // Reference uses inverted axes with 1.5x scale
+                // mat[12]=tx (positive=right), mat[13]=ty (positive=up)
+                // Don't clamp hard -- let values exceed 1 for more range
+                eyeInputX = mat[12] / 10;
+                eyeInputY = mat[13] / 6;
+                // Z calibration: use RELATIVE distance from starting position
+                // First frame with face sets the baseline
+                const rawZ = mat[14];
+                // Calibrate Z only ONCE — first ever detection
+                if (_baseZ === null) _baseZ = rawZ;
+                // How much closer than baseline (positive = closer)
+                // rawZ gets LESS negative when closer, so rawZ - _baseZ is positive when leaning in
+                // Pass raw difference: negative = closer, positive = farther
+                eyeInputZ = (rawZ - _baseZ) / 10;
+                faceDetected = true;
+                _lastFaceSeenTime = performance.now() / 1000;
+            } else {
+                faceDetected = false;
+            }
+        }
+
+        // === MOUSE (desktop fallback) ===
+        window.addEventListener('mousemove', (e) => {
+            if (faceDetected) return;
+            eyeInputX = (e.clientX / window.innerWidth - 0.5) * 2;
+            eyeInputY = -(e.clientY / window.innerHeight - 0.5) * 2;
+        });
+
+        // Start tracking + music on first tap
+        let _musicStarted = false;
+        const startOnTap = () => {
+            document.removeEventListener('touchstart', startOnTap);
+            document.removeEventListener('click', startOnTap);
+
+            // Start music FIRST (needs user gesture, must be before any async)
+            if (!_musicStarted) {
+                _musicStarted = true;
+                audio.play().catch(e => console.warn('Music:', e));
+                if (reactionSystem) reactionSystem._musicPlaying = true;
+            }
+
+            // Then start face tracking (async, won't block audio)
+            startFaceTracking();
+        };
+        document.addEventListener('touchstart', startOnTap, { once: true });
+        document.addEventListener('click', startOnTap, { once: true });
+
+        // On desktop, start face tracking immediately
+        if (!_isMobile) {
+            startFaceTracking();
+        }
+
+        // Try to auto-play music (will usually fail without gesture)
+        audio.play().catch(() => {});
+
+
+        // VFX state
+        let _vaporwaveFlash = 0;
+        let _screenShake = 0;
+        let _cameraZoomPulse = 0;
+
+        // Vaporwave flash targets (no walls anymore — flash scene bg + fog + ground)
+        const _origBgColor = new THREE.Color(0x9ac8e8);
+        const _origFogColor = new THREE.Color(0x9ac8e8);
+
+        // === RENDER LOOP ===
+        const clock = new THREE.Clock();
+        const _debugEl = document.getElementById('zdbg');
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            const time = clock.elapsedTime;
+
+            // Update animations
+            if (mixer) mixer.update(delta);
+
+            // GPU wind for instanced flowers
+            for (const fm of _flowerInstancedMeshes) {
+                fm.material.userData.uniforms.windTime.value = time;
+            }
+
+            // Update face tracker proxy with real data for reaction system
+            faceTrackerProxy.isActive = faceTrackingActive;
+            faceTrackerProxy.isPresent = faceDetected;
+            faceTrackerProxy.headPose.x = eyeInputX;
+            faceTrackerProxy.headPose.y = eyeInputY;
+            faceTrackerProxy.headPose.z = eyeInputZ;
+            faceTrackerProxy.timeSinceLeft = faceDetected ? 0 : (performance.now() / 1000 - _lastFaceSeenTime);
+
+            // Update reaction system
+            if (reactionSystem) reactionSystem.update(delta);
+            updateBgCapybara(delta);
+
+            // Panic run — move capybara toward camera
+            if (reactionSystem?.isPanicRunning) {
+                capyGroup.position.z += delta * 0.75;
+            } else {
+                // Lerp back to home position
+                const homeZ = roomZ + roomD * 0.55;
+                capyGroup.position.z += (homeZ - capyGroup.position.z) * 0.05;
+            }
+
+            // Update props
+            if (propManager) propManager.update(delta);
+
+            // Update face tracking
+            updateFaceTracking();
+
+            // Smooth eye input
+            smoothX += (eyeInputX - smoothX) * smoothing;
+            smoothY += (eyeInputY - smoothY) * smoothing;
+
+            // Camera position = eye position
+            const moveRangeX = roomW * 0.2;
+            const moveRangeY = roomH * 0.25;
+            let camPosX = baseCamX + smoothX * moveRangeX;
+            let camPosY = baseCamY + smoothY * moveRangeY;
+            let camPosZ = baseCamZ;
+
+            // Screen shake VFX
+            if (_screenShake > 0) {
+                _screenShake -= delta;
+                camPosX += (Math.random() - 0.5) * 0.15;
+                camPosY += (Math.random() - 0.5) * 0.10;
+            }
+
+            // Camera zoom pulse VFX (replaces flower shockwave)
+            if (_cameraZoomPulse > 0) {
+                _cameraZoomPulse -= delta;
+                camPosZ -= Math.sin(_cameraZoomPulse * 10) * 0.3;
+            }
+
+            camera.position.set(camPosX, camPosY, camPosZ);
+
+            // frameCorners computes the correct off-axis projection matrix
+            frameCorners(camera, bottomLeftCorner, bottomRightCorner, topLeftCorner, false);
+
+            // Vaporwave flash VFX — flash scene background + fog
+            if (_vaporwaveFlash > 0) {
+                _vaporwaveFlash -= delta;
+                const purple = new THREE.Color(0x8B5CF6);
+                scene.background.copy(purple);
+                scene.fog.color.copy(purple);
+            } else if (_vaporwaveFlash <= 0 && _vaporwaveFlash > -1) {
+                _vaporwaveFlash = -1;
+                scene.background.copy(_origBgColor);
+                scene.fog.color.copy(_origFogColor);
+            }
+
+            // Hat follows head bone
+            if (currentHatMesh && _capyHeadBone && _currentHatCfg) {
+                _capyHeadBone.getWorldPosition(_hatFollowPos);
+                _capyHeadBone.getWorldQuaternion(_hatFollowQuat);
+                const cfg = _currentHatCfg;
+                _hatOffset.set(0, cfg.fwd, -cfg.up);
+                _hatOffset.applyQuaternion(_hatFollowQuat);
+                currentHatMesh.position.copy(_hatFollowPos).add(_hatOffset);
+                currentHatMesh.quaternion.copy(_hatFollowQuat).multiply(_hatCorrectionQuat);
+            }
+
+            // Mcap bubble follows head bone
+            if (_mcapBubble) {
+                const bubbleBone = _capyHeadBone;
+                if (bubbleBone) {
+                    bubbleBone.getWorldPosition(_bubbleHeadPos);
+                    _bubbleCamRight.setFromMatrixColumn(camera.matrixWorld, 0);
+                    _bubbleCamFwd.setFromMatrixColumn(camera.matrixWorld, 2);
+                    _mcapBubble.position.copy(_bubbleHeadPos)
+                        .addScaledVector(_bubbleCamRight, -1.1)
+                        .addScaledVector(_bubbleCamFwd, 0.7);
+                    _mcapBubble.position.y += 0.65;
+                    _mcapBubble.lookAt(camera.position);
+                }
+            }
+
+            // Weather transitions
+            updateWeather(delta, time);
+
+            // Standing FX (runs AFTER weather so lighting values override rain when active)
+
+            // Debug overlay
+            if (faceDetected) {
+                _debugEl.textContent =
+                    'Z: ' + eyeInputZ.toFixed(2) + (eyeInputZ > 0.5 ? ' CLOSE' : '') + '\n' +
+                    'X: ' + eyeInputX.toFixed(2) + '  Y: ' + eyeInputY.toFixed(2) + '\n' +
+                    'state: ' + (reactionSystem ? reactionSystem._currentAnim : 'none');
+            } else {
+                _debugEl.textContent = 'face: NOT DETECTED\ntimeSince: ' + faceTrackerProxy.timeSinceLeft.toFixed(1) + 's';
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        // === RESIZE ===
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            renderer.setSize(window.innerWidth, window.innerHeight);
         });
     </script>
 </body>
