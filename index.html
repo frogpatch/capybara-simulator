@@ -85,7 +85,7 @@
     </script>
 </head>
 <body>
-    <div id="zdbg" style="position:fixed;bottom:60px;left:10px;color:#0f0;font-family:monospace;font-size:14px;font-weight:bold;z-index:99;pointer-events:none;text-shadow:0 0 4px #000;white-space:pre;background:rgba(0,0,0,0.5);padding:6px 10px;border-radius:6px"></div>
+    <div id="zdbg" style="display:none"></div>
     <div id="hud" style="display:none;">
         <div id="points"><span id="score">0</span> vibes</div>
         <div id="music-controls">
@@ -683,10 +683,11 @@
         let _bgCapybara = null, _bgCapyMixer = null, _bgCapyActive = false;
         let _bgCapySpeed = 0, _bgCapyEndX = 0, _bgCapyGoRight = true;
 
-        window._triggerBoomboxWalk = () => spawnBgCapybara();
-        window._triggerAction = (name, dur) => reactionSystem?._triggerChaotic(name, dur || 5);
-        window._showProp = (name) => propManager?.show(name);
-        window._hideProp = (name) => propManager?.hide(name);
+        // Debug helpers (uncomment for testing)
+        // window._triggerBoomboxWalk = () => spawnBgCapybara();
+        // window._triggerAction = (name, dur) => reactionSystem?._triggerChaotic(name, dur || 5);
+        // window._showProp = (name) => propManager?.show(name);
+        // window._hideProp = (name) => propManager?.hide(name);
         async function spawnBgCapybara() {
             if (_bgCapyActive) return;
 
