@@ -685,6 +685,8 @@
 
         window._triggerBoomboxWalk = () => spawnBgCapybara();
         window._triggerAction = (name, dur) => reactionSystem?._triggerChaotic(name, dur || 5);
+        window._showProp = (name) => propManager?.show(name);
+        window._hideProp = (name) => propManager?.hide(name);
         async function spawnBgCapybara() {
             if (_bgCapyActive) return;
 
@@ -1245,7 +1247,7 @@
                 // Reference uses inverted axes with 1.5x scale
                 // mat[12]=tx (positive=right), mat[13]=ty (positive=up)
                 // Don't clamp hard -- let values exceed 1 for more range
-                eyeInputX = mat[12] / 10;
+                eyeInputX = -mat[12] / 10;
                 eyeInputY = mat[13] / 6;
                 // Z calibration: use RELATIVE distance from starting position
                 // First frame with face sets the baseline

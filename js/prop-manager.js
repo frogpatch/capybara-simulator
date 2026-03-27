@@ -8,7 +8,7 @@ export class PropManager {
         this._loader = loader;
 
         this._defs = {
-            sunglasses:       { path: 'models/props/sunglasses.glb', type: 'bone', bone: 'Head', offsetUp: 0.15, offsetFwd: 0.2, offsetSide: 0, rotX: 0, rotY: 0, rotZ: 0, scale: 0.4 },
+            sunglasses:       { path: 'models/props/sunglasses.glb', type: 'bone', bone: 'Head', offsetUp: -0.15, offsetFwd: 0.8, offsetSide: 0, rotX: Math.PI + 25 * Math.PI / 180, rotY: 0, rotZ: Math.PI, scale: 0.6 },
             magazine:         { path: 'models/props/magazine.glb', type: 'bone', bone: 'RightHand', offsetUp: 0, offsetFwd: 0.1, offsetSide: 0, rotX: 0, rotY: 0, rotZ: 0, scale: 0.5 },
             'coffee-cup':     { path: 'models/props/coffee-cup.glb', type: 'bone', bone: 'LeftHand', offsetUp: -0.15, offsetFwd: 0.05, offsetSide: -0.05, rotX: 0, rotY: 0, rotZ: 65 * Math.PI / 180, scale: 0.7 },
             'stop-sign':      { path: 'models/props/stop-sign.glb', type: 'bone', bone: 'RightHand', offsetUp: 0, offsetFwd: 0.05, offsetSide: 0, rotX: Math.PI / 2, rotY: 0, rotZ: 0, scale: 0.3 },

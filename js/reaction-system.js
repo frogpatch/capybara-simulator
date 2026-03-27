@@ -172,11 +172,11 @@ export class ReactionSystem {
                 this._stopSignShown = true;
                 this._closeStartTime = 0;
             } else if (closeDuration > 4 && !this._wearingSunglasses) {
-                this._playAnim('Slap_Reaction', false);
+                this._playAnim('Slap_Reaction', true);
                 this._props?.show('sunglasses');
                 this._wearingSunglasses = true;
             } else if (closeDuration > 2 && closeDuration <= 4 && this._currentAnim !== 'Slap_Reaction') {
-                this._playAnim('Slap_Reaction', false);
+                this._playAnim('Slap_Reaction', true);
             }
 
             this._stillStartTime = 0;
@@ -256,7 +256,10 @@ export class ReactionSystem {
         switch (name) {
             case 'rubber-duck': this._props?.show('rubber-duck'); break;
             case 'boombox-walk': if (this._onBoomboxWalk) this._onBoomboxWalk(); break;
-            case 'stop-sign': this._props?.show('stop-sign'); break;
+            case 'stop-sign':
+                this._props?.show('stop-sign');
+                this._playAnim('Block1', true);
+                break;
             case 'punch-combo': this._playAnim('Punch_Combo', false); break;
             case 'tantrum': this._playAnim('Angry_To_Tantrum_Sit', false); break;
             case 'dramatic-faint':
